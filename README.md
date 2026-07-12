@@ -187,6 +187,22 @@ typing, async, and security failure modes. See
 
 ![Ollama smoke evaluation blocked after hidden-test regressions](docs/assets/ollama-report.png)
 
+## OpenAI-Compatible Runtime
+
+Agent versions such as `openai/llama3.2:3b` use a provider-neutral chat-completions adapter with
+structured output, fixed generation settings, usage metadata, prompt hashing, and isolated failures.
+The default endpoint is Ollama's local `/v1`; environment configuration can target compatible hosted
+services or NVIDIA NIM deployments.
+
+```bash
+uv run aecontrol openai doctor
+uv run aecontrol openai models
+make openai-demo
+```
+
+See [`docs/openai-compatible.md`](docs/openai-compatible.md) for endpoint configuration and the limits
+of the checked compatibility claim.
+
 ## Current Limitations
 
 The service is intentionally local-trust for this portfolio phase. Temporary workspaces are not

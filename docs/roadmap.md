@@ -10,11 +10,12 @@ Implemented ahead of the original four-day scope:
 - Optional Ollama coding runtime with structured output and provenance
 - Resource-limited process sandbox and rootless networkless Podman execution backend
 - Typed synchronous and asynchronous Python SDK
+- OpenAI-compatible model runtime with local compatibility verification
 
 Next stages:
 
 - Pinned sandbox images with seccomp/AppArmor and microVM isolation
 - Kubernetes sharded jobs
-- OpenAI-compatible and hosted LLM runtime adapters
+- Hosted provider authentication and endpoint-specific adapters
 - NeMo and LangGraph interoperability packages
 - Authentication, multi-tenancy, object storage, metrics, and observability

@@ -15,6 +15,11 @@ from aecontrol.models import (
     TrajectoryStep,
 )
 from aecontrol.ollama import OllamaClient, OllamaError, parse_ollama_agent_version
+from aecontrol.openai_compatible import (
+    OpenAICompatibleClient,
+    OpenAICompatibleError,
+    parse_openai_agent_version,
+)
 from aecontrol.sandbox import CodingSandbox
 
 
@@ -30,9 +35,11 @@ class DeterministicCodingRuntime:
         self,
         sandbox: CodingSandbox | None = None,
         ollama_client: OllamaClient | None = None,
+        openai_client: OpenAICompatibleClient | None = None,
     ) -> None:
         self._sandbox = sandbox or CodingSandbox()
         self._ollama = ollama_client or OllamaClient()
+        self._openai = openai_client or OpenAICompatibleClient()
 
     async def execute(self, request: AgentInput, context: RuntimeContext) -> AgentOutput:
         started = time.perf_counter()
@@ -47,16 +54,19 @@ class DeterministicCodingRuntime:
             )
         )
         runtime_metadata: dict[str, object] = {"provider": "deterministic"}
-        model = parse_ollama_agent_version(context.agent_version)
-        if model is None:
+        ollama_model = parse_ollama_agent_version(context.agent_version)
+        openai_model = parse_openai_agent_version(context.agent_version)
+        if ollama_model is None and openai_model is None:
             agent = get_coding_agent(context.agent_version)
             patched = agent.repair(case)
-        else:
+        elif ollama_model is not None:
             trajectory.steps.append(
-                TrajectoryStep(kind="tool_call", data={"name": "model_generate", "model": model})
+                TrajectoryStep(
+                    kind="tool_call", data={"name": "model_generate", "model": ollama_model}
+                )
             )
             try:
-                repair = await self._ollama.repair(model, case)
+                repair = await self._ollama.repair(ollama_model, case)
             except (OllamaError, ValueError) as error:
                 trajectory.steps.append(
                     TrajectoryStep(
@@ -75,14 +85,54 @@ class DeterministicCodingRuntime:
                     duration_seconds=time.perf_counter() - started,
                     status=ExecutionStatus.ERROR,
                     error=ExecutionError(error_type=type(error).__name__, message=str(error)),
-                    runtime_metadata={"provider": "ollama", "model": model},
+                    runtime_metadata={"provider": "ollama", "model": ollama_model},
                 )
             patched = repair.source
             runtime_metadata = repair.metadata
             trajectory.steps.append(
                 TrajectoryStep(
                     kind="tool_result",
-                    data={"name": "model_generate", "ok": True, "model": model},
+                    data={"name": "model_generate", "ok": True, "model": ollama_model},
+                )
+            )
+        else:
+            assert openai_model is not None
+            trajectory.steps.append(
+                TrajectoryStep(
+                    kind="tool_call", data={"name": "model_generate", "model": openai_model}
+                )
+            )
+            try:
+                compatible_repair = await self._openai.repair(openai_model, case)
+            except (OpenAICompatibleError, ValueError) as error:
+                trajectory.steps.append(
+                    TrajectoryStep(
+                        kind="error",
+                        data={"error_type": type(error).__name__, "message": str(error)},
+                    )
+                )
+                trajectory.completed_at = trajectory.steps[-1].timestamp
+                return AgentOutput(
+                    final_response=Message(role="assistant", content="Model repair failed."),
+                    trajectory=trajectory,
+                    patch="",
+                    modified_files=[],
+                    public_test_output=str(error),
+                    hidden_test_output="not run",
+                    duration_seconds=time.perf_counter() - started,
+                    status=ExecutionStatus.ERROR,
+                    error=ExecutionError(error_type=type(error).__name__, message=str(error)),
+                    runtime_metadata={
+                        "provider": "openai-compatible",
+                        "model": openai_model,
+                    },
+                )
+            patched = compatible_repair.source
+            runtime_metadata = compatible_repair.metadata
+            trajectory.steps.append(
+                TrajectoryStep(
+                    kind="tool_result",
+                    data={"name": "model_generate", "ok": True, "model": openai_model},
                 )
             )
         result = self._sandbox.run(case, patched)

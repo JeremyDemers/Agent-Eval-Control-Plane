@@ -47,18 +47,20 @@
 - Prometheus metrics, queue-aware readiness, request correlation, and server timing.
 - Policy-driven process isolation and a rootless, networkless Podman sandbox backend.
 - Typed synchronous/asynchronous SDK with transport injection and terminal job waiting.
+- OpenAI-compatible runtime with structured chat completions and local protocol verification.
 
 ## Verification
 
 - `uv sync --extra dev`: passed.
 - `uv run ruff format . && uv run ruff check .`: passed.
 - `uv run mypy`: passed with strict settings.
-- `uv run pytest`: 47 passed, 85% total coverage with an enforced floor, including PostgreSQL/API, worker, Ollama, sandbox, observability, and SDK tests.
+- `uv run pytest`: 55 passed, 85.52% total coverage with an enforced 85% floor, including PostgreSQL/API, worker, Ollama, OpenAI-compatible runtime, sandbox, observability, and SDK tests.
 - `make demo`: passed; regressed candidate produced BLOCK, fixed candidate produced PASS.
 - `make docker-build && make docker-demo`: passed with native Podman.
 - `make sandbox-demo`: 4/4 cases passed through networkless, read-only rootless Podman containers.
 - `make sdk-demo`: live typed SDK evaluation passed 4/4 hidden tests against a temporary service.
 - `make ollama-demo`: completed against local `llama3.2:3b`; 1/4 hidden tests passed and the release gate correctly returned BLOCK.
+- `make openai-demo`: completed through Ollama's OpenAI-compatible `/v1` API; 1/4 hidden tests passed and the release gate correctly returned BLOCK.
 - `docs/assets/regressed-report.png`: regenerated from `reports/regressed.html` with headless Chrome.
 
 ## Known Limitations
