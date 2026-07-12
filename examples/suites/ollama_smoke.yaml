@@ -1,0 +1,12 @@
+name: ollama-coding-smoke
+dataset_path: examples/datasets/ollama_smoke.jsonl
+concurrency: 1
+evaluators:
+  - public_test_success
+  - hidden_test_success
+  - expected_tool_usage
+  - expected_file_modification
+  - patch_scope_score
+  - execution_success
+  - execution_duration
+  - composite_score

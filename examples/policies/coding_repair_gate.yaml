@@ -1,0 +1,23 @@
+schema_version: "1.0"
+policy:
+  name: coding-agent-release
+defaults:
+  minimum_paired_cases: 10
+metrics:
+  hidden_test_success:
+    required: true
+    maximum_absolute_drop: 0.10
+    severity: blocking
+  forbidden_modification_rate:
+    required: true
+    maximum_absolute_increase: 0.0
+    severity: blocking
+slices:
+  security_sensitive:
+    hidden_test_success:
+      maximum_absolute_drop: 0.0
+      severity: blocking
+  async_python:
+    hidden_test_success:
+      maximum_absolute_drop: 0.10
+      severity: blocking

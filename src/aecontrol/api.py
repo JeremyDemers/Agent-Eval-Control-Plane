@@ -1,0 +1,389 @@
+from __future__ import annotations
+
+import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from html import escape
+from importlib.metadata import version
+from pathlib import Path
+from uuid import UUID
+
+from fastapi import FastAPI, HTTPException, Query, status
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
+
+from aecontrol.compare import compare_runs
+from aecontrol.engine import EvaluationEngine, load_suite
+from aecontrol.gate import evaluate_gate, load_policy
+from aecontrol.models import (
+    Accelerator,
+    CaseResult,
+    EvaluationJob,
+    EvaluationRun,
+    JobStatus,
+    StoredComparison,
+    StoredComparisonSummary,
+    StoredRunSummary,
+    WorkerRecord,
+)
+from aecontrol.store import ArtifactStore
+
+DEFAULT_DATABASE_URL = "postgresql://aecontrol@127.0.0.1:55432/aecontrol"
+
+
+class EvaluationRequest(BaseModel):
+    suite_path: str
+    agent_version: str
+
+
+class ComparisonRequest(BaseModel):
+    baseline_run_id: UUID
+    candidate_run_id: UUID
+    policy_path: str
+
+
+class EvaluationJobRequest(BaseModel):
+    suite_path: str
+    agent_version: str
+    priority: int = Field(default=0, ge=-100, le=100)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    required_accelerator: Accelerator = Accelerator.CPU
+    required_labels: dict[str, str] = Field(default_factory=dict)
+
+
+def create_app(database_url: str | None = None, schema: str = "public") -> FastAPI:
+    resolved_database_url = database_url or os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
+    store = ArtifactStore(resolved_database_url, schema=schema)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        store.initialize()
+        yield
+
+    application = FastAPI(
+        title="AgentEval Control Plane",
+        version=version("aecontrol"),
+        description=(
+            "Durable agent evaluation jobs, normalized trajectories, regression analysis, "
+            "and release gates."
+        ),
+        lifespan=lifespan,
+    )
+    application.state.store = store
+
+    @application.get("/healthz", tags=["operations"])
+    def health() -> dict[str, object]:
+        return store.health()
+
+    @application.get("/api/v1/runs", response_model=list[StoredRunSummary], tags=["runs"])
+    def list_runs(limit: int = 100) -> list[StoredRunSummary]:
+        if not 1 <= limit <= 500:
+            raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+        return store.list_runs(limit)
+
+    @application.get("/api/v1/jobs", response_model=list[EvaluationJob], tags=["jobs"])
+    def list_jobs(
+        limit: int = 100,
+        job_status: JobStatus | None = Query(default=None, alias="status"),
+    ) -> list[EvaluationJob]:
+        if not 1 <= limit <= 500:
+            raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+        return store.list_jobs(limit, job_status)
+
+    @application.post(
+        "/api/v1/jobs",
+        response_model=EvaluationJob,
+        status_code=status.HTTP_202_ACCEPTED,
+        tags=["jobs"],
+    )
+    def enqueue_job(request: EvaluationJobRequest) -> EvaluationJob:
+        suite_path = _existing_file(request.suite_path, "suite")
+        try:
+            return store.enqueue_job(
+                str(suite_path),
+                request.agent_version,
+                request.priority,
+                request.max_attempts,
+                request.required_accelerator,
+                request.required_labels,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.get("/api/v1/jobs/{job_id}", response_model=EvaluationJob, tags=["jobs"])
+    def get_job(job_id: UUID) -> EvaluationJob:
+        try:
+            return store.get_job(job_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="job was not found") from error
+
+    @application.delete("/api/v1/jobs/{job_id}", response_model=EvaluationJob, tags=["jobs"])
+    def cancel_job(job_id: UUID) -> EvaluationJob:
+        try:
+            return store.cancel_job(job_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="job was not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.get("/api/v1/workers", response_model=list[WorkerRecord], tags=["workers"])
+    def list_workers() -> list[WorkerRecord]:
+        return store.list_workers()
+
+    @application.post(
+        "/api/v1/evaluations",
+        response_model=EvaluationRun,
+        status_code=status.HTTP_201_CREATED,
+        tags=["runs"],
+    )
+    async def evaluate(request: EvaluationRequest) -> EvaluationRun:
+        suite_path = _existing_file(request.suite_path, "suite")
+        try:
+            run = await EvaluationEngine().run(load_suite(suite_path), request.agent_version)
+        except (KeyError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        store.save_run(run)
+        return run
+
+    @application.get("/api/v1/runs/{run_id}", response_model=EvaluationRun, tags=["runs"])
+    def get_run(run_id: UUID) -> EvaluationRun:
+        return _get_run(store, run_id)
+
+    @application.get(
+        "/api/v1/runs/{run_id}/cases/{case_id}", response_model=CaseResult, tags=["runs"]
+    )
+    def get_case(run_id: UUID, case_id: str) -> CaseResult:
+        run = _get_run(store, run_id)
+        result = next((item for item in run.case_results if item.case.case_id == case_id), None)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"case {case_id} was not found")
+        return result
+
+    @application.get(
+        "/api/v1/comparisons",
+        response_model=list[StoredComparisonSummary],
+        tags=["comparisons"],
+    )
+    def list_comparisons(limit: int = 100) -> list[StoredComparisonSummary]:
+        if not 1 <= limit <= 500:
+            raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+        return store.list_comparisons(limit)
+
+    @application.post(
+        "/api/v1/comparisons",
+        response_model=StoredComparison,
+        status_code=status.HTTP_201_CREATED,
+        tags=["comparisons"],
+    )
+    def create_comparison(request: ComparisonRequest) -> StoredComparison:
+        baseline = _get_run(store, request.baseline_run_id)
+        candidate = _get_run(store, request.candidate_run_id)
+        policy_path = _existing_file(request.policy_path, "policy")
+        comparison = compare_runs(baseline, candidate)
+        decision = evaluate_gate(comparison, load_policy(policy_path))
+        return store.save_comparison(comparison, decision)
+
+    @application.get(
+        "/api/v1/comparisons/{comparison_id}",
+        response_model=StoredComparison,
+        tags=["comparisons"],
+    )
+    def get_comparison(comparison_id: UUID) -> StoredComparison:
+        try:
+            return store.get_comparison(comparison_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="comparison was not found") from error
+
+    @application.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def dashboard() -> str:
+        return _render_dashboard(
+            store.list_runs(), store.list_comparisons(), store.list_jobs(), store.list_workers()
+        )
+
+    @application.get("/runs/{run_id}", response_class=HTMLResponse, include_in_schema=False)
+    def run_detail(run_id: UUID) -> str:
+        return _render_run(_get_run(store, run_id))
+
+    @application.get(
+        "/comparisons/{comparison_id}", response_class=HTMLResponse, include_in_schema=False
+    )
+    def comparison_detail(comparison_id: UUID) -> str:
+        try:
+            artifact = store.get_comparison(comparison_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="comparison was not found") from error
+        return _render_comparison(artifact)
+
+    return application
+
+
+def _existing_file(value: str, label: str) -> Path:
+    path = Path(value)
+    if not path.is_file():
+        raise HTTPException(status_code=422, detail=f"{label} file was not found: {value}")
+    return path
+
+
+def _get_run(store: ArtifactStore, run_id: UUID) -> EvaluationRun:
+    try:
+        return store.get_run(run_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="run was not found") from error
+
+
+def _page(title: str, body: str) -> str:
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>{escape(title)} | AgentEval</title><style>
+:root{{--ink:#171a1f;--muted:#66707b;--line:#d8dde3;--paper:#fff;--wash:#f4f6f8;
+--green:#147a4b;--red:#b42318;--amber:#9a6700;--blue:#1769aa}}
+*{{box-sizing:border-box}}body{{margin:0;color:var(--ink);background:var(--wash);
+font:14px/1.45 system-ui,sans-serif;letter-spacing:0}}header{{background:#111820;color:#fff;
+padding:18px 28px;display:flex;align-items:center;justify-content:space-between}}
+header a{{color:#fff;text-decoration:none}}header strong{{font-size:20px}}nav{{display:flex;gap:16px}}
+main{{max-width:1280px;margin:0 auto;padding:28px}}h1{{font-size:26px;margin:0 0 6px}}
+h2{{font-size:17px;margin:26px 0 10px}}p{{margin:5px 0}}.muted{{color:var(--muted)}}
+.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:18px 0}}
+.metric{{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:14px}}
+.metric b{{display:block;font-size:22px;margin-top:4px;overflow-wrap:anywhere}}table{{width:100%;border-collapse:collapse;
+background:var(--paper);border:1px solid var(--line)}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);
+text-align:left;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:var(--muted);background:#f9fafb}}
+tr:last-child td{{border-bottom:0}}a{{color:var(--blue)}}.PASS,.passed{{color:var(--green);font-weight:700}}
+.BLOCK,.failed,.error,.regressed{{color:var(--red);font-weight:700}}.WARN,.queued{{color:var(--amber);font-weight:700}}
+.completed{{color:var(--green);font-weight:700}}.running{{color:var(--blue);font-weight:700}}
+details{{background:#fff;border:1px solid var(--line);border-radius:6px;margin:8px 0;padding:10px 12px}}
+summary{{cursor:pointer;font-weight:650}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#111820;color:#e8edf2;
+padding:14px;border-radius:5px;font:12px/1.5 ui-monospace,monospace}}.tag{{display:inline-block;border:1px solid var(--line);
+border-radius:4px;padding:2px 6px;margin-right:4px;color:var(--muted)}}
+@media(max-width:720px){{header{{align-items:flex-start;padding:16px}}main{{padding:18px 12px}}
+table{{display:block;overflow-x:auto}}nav{{gap:10px}}}}
+</style></head><body><header><a href="/"><strong>AgentEval Control Plane</strong></a>
+<nav><a href="/docs">API</a><a href="/redoc">Schema</a></nav></header><main>{body}</main></body></html>"""
+
+
+def _render_dashboard(
+    runs: list[StoredRunSummary],
+    comparisons: list[StoredComparisonSummary],
+    jobs: list[EvaluationJob],
+    workers: list[WorkerRecord],
+) -> str:
+    run_rows = (
+        "".join(
+            f"<tr><td><a href='/runs/{row.run_id}'>{escape(row.agent_version)}</a></td>"
+            f"<td>{escape(row.suite_name)}</td><td>{row.case_count}</td>"
+            f"<td>{row.hidden_pass_rate:.1%}</td><td>{row.completed_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>"
+            for row in runs
+        )
+        or "<tr><td colspan='5'>No persisted runs yet.</td></tr>"
+    )
+    comparison_rows = (
+        "".join(
+            f"<tr><td><a href='/comparisons/{row.comparison_id}'>{str(row.comparison_id)[:8]}</a></td>"
+            f"<td class='{row.outcome}'>{row.outcome}</td><td>{row.paired_cases}</td>"
+            f"<td>{row.aggregate_pass_rate_delta:+.1%}</td><td>{row.created_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>"
+            for row in comparisons
+        )
+        or "<tr><td colspan='5'>No persisted comparisons yet.</td></tr>"
+    )
+    job_rows = (
+        "".join(
+            f"<tr><td>{str(row.job_id)[:8]}</td><td>{escape(row.agent_version)}</td>"
+            f"<td class='{row.status}'>{row.status}</td><td>{row.required_accelerator}</td><td>{row.priority}</td>"
+            f"<td>{row.attempts}/{row.max_attempts}</td>"
+            f"<td>{escape(row.lease_owner or '-')}</td></tr>"
+            for row in jobs
+        )
+        or "<tr><td colspan='7'>No evaluation jobs yet.</td></tr>"
+    )
+    worker_rows = (
+        "".join(
+            f"<tr><td>{escape(row.worker_id)}</td><td>{escape(row.capabilities.hostname)}</td>"
+            f"<td>{escape(', '.join(item.value for item in row.capabilities.accelerators))}</td>"
+            f"<td>{escape(', '.join(gpu.name for gpu in row.capabilities.gpus) or '-')}</td>"
+            f"<td>{row.last_seen_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>"
+            for row in workers
+        )
+        or "<tr><td colspan='5'>No workers have registered.</td></tr>"
+    )
+    active_jobs = sum(row.status in {JobStatus.QUEUED, JobStatus.RUNNING} for row in jobs)
+    return _page(
+        "Runs",
+        f"""<h1>Evaluation Runs</h1><p class="muted">Durable agent evidence and release decisions.</p>
+<div class="metrics"><div class="metric">Stored runs<b>{len(runs)}</b></div>
+<div class="metric">Active jobs<b>{active_jobs}</b></div>
+<div class="metric">Comparisons<b>{len(comparisons)}</b></div>
+<div class="metric">API contract<b>OpenAPI 3</b></div></div>
+<h2>Worker Inventory</h2><table><thead><tr><th>Worker</th><th>Host</th><th>Accelerators</th><th>GPU</th><th>Last Seen</th></tr></thead><tbody>{worker_rows}</tbody></table>
+<h2>Evaluation Queue</h2><table><thead><tr><th>Job</th><th>Agent</th><th>Status</th><th>Requires</th><th>Priority</th><th>Attempts</th><th>Worker</th></tr></thead><tbody>{job_rows}</tbody></table>
+<h2>Recent Runs</h2><table><thead><tr><th>Agent</th><th>Suite</th><th>Cases</th><th>Hidden pass</th><th>Completed</th></tr></thead><tbody>{run_rows}</tbody></table>
+<h2>Release Decisions</h2><table><thead><tr><th>ID</th><th>Gate</th><th>Pairs</th><th>Delta</th><th>Created</th></tr></thead><tbody>{comparison_rows}</tbody></table>""",
+    )
+
+
+def _render_run(run: EvaluationRun) -> str:
+    hidden_passes = sum(result.hidden_success for result in run.case_results)
+    ordered_results = sorted(
+        run.case_results, key=lambda result: (result.hidden_success, result.case.case_id)
+    )
+    case_sections = "".join(_render_case(result) for result in ordered_results)
+    return _page(
+        f"Run {str(run.run_id)[:8]}",
+        f"""<h1>{escape(run.agent_version)}</h1><p class="muted">Run {run.run_id}</p>
+<div class="metrics"><div class="metric">Cases<b>{len(run.case_results)}</b></div>
+<div class="metric">Hidden pass<b>{hidden_passes}/{len(run.case_results)}</b></div>
+<div class="metric">Dataset<b>{escape(run.dataset_version)}</b></div></div>
+<h2>Case Trajectories</h2>{case_sections}""",
+    )
+
+
+def _render_case(result: CaseResult) -> str:
+    tools = [
+        escape(str(step.data.get("name", "unknown")))
+        for step in result.output.trajectory.steps
+        if step.kind == "tool_call"
+    ]
+    metrics = " ".join(
+        f"<span class='tag'>{escape(item.name)} {item.score:.2f}</span>"
+        for item in result.evaluator_results
+    )
+    return f"""<details><summary>{escape(result.case.case_id)} · {escape(result.case.title)}
+<span class="{result.status}">{result.status}</span></summary>
+<p>{metrics}</p><p><b>Tools:</b> {", ".join(tools)}</p><h3>Patch</h3>
+<pre>{escape(result.output.patch)}</pre><h3>Hidden test output</h3>
+<pre>{escape(result.output.hidden_test_output)}</pre></details>"""
+
+
+def _render_comparison(artifact: StoredComparison) -> str:
+    comparison = artifact.comparison
+    decision = artifact.decision
+    findings = (
+        "".join(
+            f"<tr><td>{escape(item.scope)}</td><td>{escape(item.metric)}</td>"
+            f"<td class='{item.outcome}'>{item.outcome}</td><td>{escape(item.message)}</td></tr>"
+            for item in decision.findings
+        )
+        or "<tr><td colspan='4'>No gate findings.</td></tr>"
+    )
+    cases = "".join(
+        f"<tr><td>{escape(item.case_id)}</td><td>{escape(item.slice)}</td>"
+        f"<td class='{item.classification}'>{escape(item.classification)}</td>"
+        f"<td>{escape(item.explanation)}</td></tr>"
+        for item in sorted(
+            comparison.case_comparisons,
+            key=lambda item: (item.classification != "regressed", item.case_id),
+        )
+    )
+    return _page(
+        f"Comparison {str(artifact.comparison_id)[:8]}",
+        f"""<h1>Release Decision <span class="{decision.outcome}">{decision.outcome}</span></h1>
+<p class="muted">Comparison {artifact.comparison_id}</p><div class="metrics">
+<div class="metric">Paired cases<b>{comparison.paired_cases}</b></div>
+<div class="metric">Pass-rate delta<b>{comparison.aggregate_pass_rate_delta:+.1%}</b></div>
+<div class="metric">Regressions<b>{len(comparison.regressed_cases)}</b></div></div>
+<h2>Gate Findings</h2><table><thead><tr><th>Scope</th><th>Metric</th><th>Outcome</th><th>Evidence</th></tr></thead><tbody>{findings}</tbody></table>
+<h2>Case Analysis</h2><table><thead><tr><th>Case</th><th>Slice</th><th>Class</th><th>Explanation</th></tr></thead><tbody>{cases}</tbody></table>""",
+    )
+
+
+app = create_app()

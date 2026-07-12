@@ -1,0 +1,16 @@
+schema_version: "1"
+policy:
+  name: ollama-smoke-release
+defaults:
+  minimum_paired_cases: 4
+metrics:
+  hidden_test_success:
+    required: true
+    maximum_absolute_drop: 0.25
+    severity: blocking
+slices:
+  security_sensitive:
+    hidden_test_success:
+      required: true
+      maximum_absolute_drop: 1.0
+      severity: warning

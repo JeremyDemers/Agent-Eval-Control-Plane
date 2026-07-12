@@ -1,0 +1,15 @@
+.notes
+Agent Evaluation Control Plane.md
+.aecontrol/
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+reports/
+*.egg-info/
+*.pyc

@@ -1,0 +1,15 @@
+name: coding-repair-release
+dataset_path: examples/datasets/coding_repair.jsonl
+concurrency: 4
+evaluators:
+  - public_test_success
+  - hidden_test_success
+  - expected_tool_usage
+  - forbidden_tool_usage
+  - expected_file_modification
+  - forbidden_file_modification
+  - patch_scope_score
+  - test_weakening_detection
+  - execution_success
+  - execution_duration
+  - composite_score

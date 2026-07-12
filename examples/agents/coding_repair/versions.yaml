@@ -1,0 +1,10 @@
+agents:
+  - name: coding-repair-agent
+    version: baseline
+    description: Deterministic reference agent that applies the expected minimal repair.
+  - name: coding-repair-agent
+    version: candidate_regressed
+    description: Candidate with a subtle security validation regression on SEC-01 and SEC-04.
+  - name: coding-repair-agent
+    version: candidate_fixed
+    description: Corrected candidate that restores validation behavior on the critical slice.

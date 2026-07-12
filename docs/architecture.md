@@ -1,0 +1,29 @@
+# Architecture
+
+AgentEval Control Plane is local-first but now has two entry points over one domain layer. The Typer
+CLI supports CI and offline artifact workflows. The FastAPI service exposes evaluations, stored runs,
+case trajectories, comparisons, and release decisions to API clients and the browser trace explorer.
+
+The evaluation engine loads a versioned JSONL dataset, invokes a runtime adapter for each case, runs
+deterministic evaluators, then emits immutable run artifacts. PostgreSQL stores the complete Pydantic
+contracts as JSONB while indexing identity, version, timestamps, pass rate, gate outcome, and aggregate
+delta for control-plane queries. A schema metadata table rejects unsupported storage versions.
+
+Runtime adapters and evaluators use typed protocols so future integrations can be added without
+rewriting the core engine.
+
+The coding-repair demo models each agent version as a strategy class. The runtime resolves
+`baseline`, `candidate_regressed`, or `candidate_fixed`, then executes the same dataset and evaluator
+suite for each version. This keeps agent behavior separate from comparison and quality-gate logic.
+
+Each process opens short-lived PostgreSQL connections and commits one artifact transaction at a time.
+Integration tests allocate a unique schema, exercise the full HTTP workflow, and drop that schema on
+completion. GitHub Actions runs the same tests against a PostgreSQL service container.
+
+Evaluation admission is decoupled from execution through durable jobs. Workers claim priority-ordered
+rows with `FOR UPDATE SKIP LOCKED`, heartbeat expiring leases, and retry failures up to a per-job
+budget. This design supports horizontal worker scaling without introducing a separate queue service.
+
+Workers register normalized CPU, NVIDIA GPU, and operator-label capabilities. Accelerator and label
+requirements are evaluated inside the atomic claim query, keeping incompatible jobs out of a worker's
+lease and retry history.

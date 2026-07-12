@@ -1,0 +1,327 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any, Literal
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+JsonValue = Any
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+class ExecutionStatus(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    ERROR = "error"
+
+
+class GateOutcome(StrEnum):
+    PASS = "PASS"
+    WARN = "WARN"
+    BLOCK = "BLOCK"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+class JobStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class Accelerator(StrEnum):
+    CPU = "cpu"
+    CUDA = "cuda"
+
+
+class Message(BaseModel):
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str
+
+
+class AgentVersion(BaseModel):
+    name: str
+    version: str
+    description: str = ""
+
+
+class DatasetCase(BaseModel):
+    case_id: str
+    title: str
+    slice: str
+    bug_kind: str
+    severity: Literal["low", "medium", "high", "critical"] = "medium"
+    expected_tools: list[str] = Field(default_factory=list)
+    forbidden_tools: list[str] = Field(default_factory=list)
+    expected_modified_files: list[str] = Field(default_factory=list)
+    forbidden_modified_files: list[str] = Field(default_factory=list)
+
+    @field_validator("case_id", "slice", "bug_kind")
+    @classmethod
+    def non_empty(cls, value: str) -> str:
+        if not value.strip():
+            msg = "value must not be empty"
+            raise ValueError(msg)
+        return value
+
+
+class DatasetSlice(BaseModel):
+    name: str
+    case_ids: list[str]
+
+
+class Dataset(BaseModel):
+    name: str
+    version: str
+    cases: list[DatasetCase]
+    slices: list[DatasetSlice]
+
+
+class EvaluationSuite(BaseModel):
+    name: str
+    dataset_path: str
+    evaluators: list[str]
+    concurrency: int = Field(default=4, ge=1, le=32)
+
+
+class ToolCall(BaseModel):
+    call_id: UUID = Field(default_factory=uuid4)
+    name: str
+    arguments: dict[str, JsonValue] = Field(default_factory=dict)
+    started_at: datetime = Field(default_factory=utc_now)
+
+
+class ToolResult(BaseModel):
+    call_id: UUID
+    name: str
+    ok: bool
+    output: str
+    completed_at: datetime = Field(default_factory=utc_now)
+
+
+class TrajectoryStep(BaseModel):
+    step_id: UUID = Field(default_factory=uuid4)
+    kind: Literal["message", "tool_call", "tool_result", "error", "final"]
+    timestamp: datetime = Field(default_factory=utc_now)
+    data: dict[str, JsonValue]
+
+
+class AgentTrajectory(BaseModel):
+    trajectory_id: UUID = Field(default_factory=uuid4)
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    steps: list[TrajectoryStep] = Field(default_factory=list)
+
+
+class ExecutionError(BaseModel):
+    error_type: str
+    message: str
+
+
+class AgentInput(BaseModel):
+    case_id: str
+    messages: list[Message] = Field(default_factory=list)
+    variables: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class AgentOutput(BaseModel):
+    final_response: Message | None = None
+    trajectory: AgentTrajectory
+    patch: str
+    modified_files: list[str]
+    public_test_output: str
+    hidden_test_output: str
+    duration_seconds: float
+    status: ExecutionStatus
+    error: ExecutionError | None = None
+    runtime_metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class EvaluationResult(BaseModel):
+    name: str
+    passed: bool
+    score: float = Field(ge=0.0, le=1.0)
+    explanation: str
+    metric_value: float | None = None
+
+
+class CaseResult(BaseModel):
+    case: DatasetCase
+    agent_version: str
+    status: ExecutionStatus
+    started_at: datetime
+    completed_at: datetime
+    output: AgentOutput
+    evaluator_results: list[EvaluationResult]
+
+    @property
+    def hidden_success(self) -> bool:
+        return any(
+            result.name == "hidden_test_success" and result.passed
+            for result in self.evaluator_results
+        )
+
+
+class EvaluationRun(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID = Field(default_factory=uuid4)
+    suite_name: str
+    dataset_name: str
+    dataset_version: str
+    agent_version: str
+    started_at: datetime
+    completed_at: datetime
+    case_results: list[CaseResult]
+
+
+class CaseComparison(BaseModel):
+    case_id: str
+    slice: str
+    baseline_passed: bool
+    candidate_passed: bool
+    classification: Literal["improved", "regressed", "unchanged_pass", "unchanged_fail"]
+    metric_deltas: dict[str, float] = Field(default_factory=dict)
+    explanation: str
+
+
+class SliceComparison(BaseModel):
+    slice: str
+    paired_cases: int
+    baseline_pass_rate: float
+    candidate_pass_rate: float
+    pass_rate_delta: float
+
+
+class RunComparison(BaseModel):
+    baseline_run_id: UUID
+    candidate_run_id: UUID
+    paired_cases: int
+    missing_pairs: list[str]
+    aggregate_pass_rate_delta: float
+    metric_deltas: dict[str, float] = Field(default_factory=dict)
+    confidence_interval: tuple[float, float] | None
+    limited_evidence: bool
+    improved_cases: list[str]
+    regressed_cases: list[str]
+    unchanged_passes: int
+    unchanged_failures: int
+    slice_comparisons: list[SliceComparison]
+    case_comparisons: list[CaseComparison]
+
+
+class MetricRule(BaseModel):
+    required: bool = False
+    maximum_absolute_drop: float | None = None
+    maximum_absolute_increase: float | None = None
+    severity: Literal["blocking", "warning"] = "blocking"
+
+
+class QualityGatePolicy(BaseModel):
+    schema_version: str
+    policy: dict[str, str]
+    defaults: dict[str, int] = Field(default_factory=dict)
+    metrics: dict[str, MetricRule] = Field(default_factory=dict)
+    slices: dict[str, dict[str, MetricRule]] = Field(default_factory=dict)
+
+
+class GateFinding(BaseModel):
+    scope: str
+    metric: str
+    outcome: GateOutcome
+    observed_delta: float | None
+    threshold: float | None
+    message: str
+
+
+class QualityGateDecision(BaseModel):
+    outcome: GateOutcome
+    findings: list[GateFinding]
+    regressed_cases: list[str]
+
+
+class StoredRunSummary(BaseModel):
+    run_id: UUID
+    suite_name: str
+    dataset_name: str
+    dataset_version: str
+    agent_version: str
+    started_at: datetime
+    completed_at: datetime
+    case_count: int
+    hidden_pass_rate: float
+
+
+class StoredComparison(BaseModel):
+    comparison_id: UUID = Field(default_factory=uuid4)
+    created_at: datetime = Field(default_factory=utc_now)
+    comparison: RunComparison
+    decision: QualityGateDecision
+
+
+class StoredComparisonSummary(BaseModel):
+    comparison_id: UUID
+    baseline_run_id: UUID
+    candidate_run_id: UUID
+    created_at: datetime
+    outcome: GateOutcome
+    paired_cases: int
+    aggregate_pass_rate_delta: float
+
+
+class EvaluationJob(BaseModel):
+    job_id: UUID = Field(default_factory=uuid4)
+    suite_path: str
+    agent_version: str
+    status: JobStatus = JobStatus.QUEUED
+    priority: int = Field(default=0, ge=-100, le=100)
+    attempts: int = Field(default=0, ge=0)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    run_id: UUID | None = None
+    error: str | None = None
+    required_accelerator: Accelerator = Accelerator.CPU
+    required_labels: dict[str, str] = Field(default_factory=dict)
+
+
+class GpuDevice(BaseModel):
+    name: str
+    memory_total_mb: int = Field(ge=0)
+    compute_capability: str
+
+
+class WorkerCapabilities(BaseModel):
+    hostname: str
+    operating_system: str
+    architecture: str
+    cpu_count: int = Field(ge=1)
+    accelerators: list[Accelerator]
+    gpus: list[GpuDevice] = Field(default_factory=list)
+    labels: dict[str, str] = Field(default_factory=dict)
+
+
+class WorkerRecord(BaseModel):
+    worker_id: str
+    capabilities: WorkerCapabilities
+    registered_at: datetime
+    last_seen_at: datetime
+
+
+class ValidationIssue(BaseModel):
+    location: str
+    message: str
+
+
+class ValidationReport(BaseModel):
+    valid: bool
+    issues: list[ValidationIssue] = Field(default_factory=list)
