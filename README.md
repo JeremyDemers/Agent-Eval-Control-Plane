@@ -276,3 +276,9 @@ Schema v3 backfills existing PostgreSQL artifacts in place. See
 The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
 hardened isolation for untrusted code. Kubernetes execution, hosted LLM runtimes, object storage,
 NeMo/LangGraph adapters, and production observability remain in `docs/roadmap.md`.
+
+## Project Governance
+
+Contributions are welcome through focused issues and pull requests. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md), and
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for validation, disclosure, and participation guidance.

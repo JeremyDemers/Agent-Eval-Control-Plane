@@ -55,6 +55,7 @@
 - Tamper-evident run and comparison payloads with full-store integrity audits.
 - Reproducible wheel/sdist packaging with clean-install and provenance-attested releases.
 - CodeQL, dependency review, and weekly frozen-lock vulnerability scanning.
+- Public contribution, disclosure, ownership, issue, and pull-request governance.
 
 ## Verification
 

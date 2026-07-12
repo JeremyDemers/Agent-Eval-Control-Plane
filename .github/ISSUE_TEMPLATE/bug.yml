@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a reproducible defect in AgentEval Control Plane.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not report vulnerabilities here. Use the private security advisory link instead.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: Describe what happened and include the complete error without credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include commands, dataset or policy inputs, and whether the issue reproduces twice.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.15.0 or aa7fe07
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      options:
+        - Evaluation engine or gate
+        - API or SDK
+        - PostgreSQL queue or worker
+        - Sandbox
+        - GPU scheduling or telemetry
+        - Provider runtime
+        - Packaging or CI
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python, PostgreSQL, Podman, GPU, and provider versions that matter.
+    validations:
+      required: true

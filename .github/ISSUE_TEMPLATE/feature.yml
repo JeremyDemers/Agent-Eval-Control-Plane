@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a focused control-plane improvement.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete evaluation or operational problem is not handled today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe contracts, failure behavior, and how users would verify the result.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: The proposal can remain deterministic in CI.
+          required: true
+        - label: The proposal does not expose hidden evaluation data to agents.
+          required: true
