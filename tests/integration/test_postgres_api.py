@@ -13,7 +13,7 @@ from psycopg import sql
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key
 from aecontrol.jobs import EvaluationWorker
-from aecontrol.models import Accelerator, JobStatus, WorkerCapabilities
+from aecontrol.models import Accelerator, GpuDevice, JobStatus, WorkerCapabilities
 from aecontrol.store import ArtifactStore
 
 
@@ -29,6 +29,31 @@ def api_client(database_url: str) -> TestClient:
         yield client
     with psycopg.connect(database_url, autocommit=True) as connection:
         connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
+    schema = f"test_{uuid4().hex}"
+    try:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+            connection.execute(
+                sql.SQL("CREATE TABLE {}.schema_metadata (version INTEGER NOT NULL)").format(
+                    sql.Identifier(schema)
+                )
+            )
+            connection.execute(
+                sql.SQL("INSERT INTO {}.schema_metadata(version) VALUES (1)").format(
+                    sql.Identifier(schema)
+                )
+            )
+
+        store = ArtifactStore(database_url, schema=schema)
+        assert store.health()["schema_version"] == 2
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
 
 
 def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -91,7 +116,7 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 1
+    assert health.json()["schema_version"] == 2
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["server-timing"].startswith("app;dur=")
 
@@ -268,6 +293,84 @@ def test_capability_aware_job_placement(api_client: TestClient) -> None:
     compatible_job = store.enqueue_job("examples/suites/coding_repair.yaml", "openai/test-model")
     assert compatible_job.required_labels == {"runtime": "openai-compatible"}
     store.cancel_job(compatible_job.job_id)
+
+
+def test_gpu_resource_constraints_are_atomically_admitted(api_client: TestClient) -> None:
+    store: ArtifactStore = api_client.app.state.store
+    constrained = store.enqueue_job(
+        "examples/suites/coding_repair.yaml",
+        "baseline",
+        required_accelerator=Accelerator.CUDA,
+        minimum_gpu_memory_mb=12000,
+        minimum_cuda_compute_capability=8.9,
+    )
+    base = WorkerCapabilities(
+        hostname="gpu-host",
+        operating_system="linux",
+        architecture="x86_64",
+        cpu_count=8,
+        accelerators=[Accelerator.CPU, Accelerator.CUDA],
+    )
+    insufficient_memory = base.model_copy(
+        update={
+            "gpus": [GpuDevice(name="Small Ada", memory_total_mb=8192, compute_capability="8.9")]
+        }
+    )
+    assert store.lease_job("small-worker", capabilities=insufficient_memory) is None
+    assert store.get_job(constrained.job_id).attempts == 0
+
+    insufficient_compute = base.model_copy(
+        update={
+            "gpus": [
+                GpuDevice(
+                    name="Large Older GPU",
+                    memory_total_mb=16384,
+                    compute_capability="8.0",
+                )
+            ]
+        }
+    )
+    assert store.lease_job("older-worker", capabilities=insufficient_compute) is None
+    assert store.get_job(constrained.job_id).attempts == 0
+
+    split_resources = base.model_copy(
+        update={
+            "gpus": [
+                GpuDevice(name="Fast Small", memory_total_mb=8192, compute_capability="9.0"),
+                GpuDevice(name="Large Old", memory_total_mb=24576, compute_capability="8.0"),
+            ]
+        }
+    )
+    assert store.lease_job("split-worker", capabilities=split_resources) is None
+    assert store.get_job(constrained.job_id).attempts == 0
+
+    qualified = base.model_copy(
+        update={
+            "gpus": [
+                GpuDevice(
+                    name="RTX 5000 Ada",
+                    memory_total_mb=16376,
+                    compute_capability="8.9",
+                )
+            ]
+        }
+    )
+    claimed = store.lease_job("qualified-worker", capabilities=qualified)
+    assert claimed is not None
+    assert claimed.job_id == constrained.job_id
+    assert claimed.attempts == 1
+    store.cancel_job(constrained.job_id)
+
+    invalid = api_client.post(
+        "/api/v1/jobs",
+        json={
+            "suite_path": "examples/suites/coding_repair.yaml",
+            "agent_version": "baseline",
+            "minimum_gpu_memory_mb": 1000,
+        },
+    )
+    assert invalid.status_code == 422
+    assert "require the cuda accelerator" in invalid.json()["detail"]
 
 
 def test_readiness_detects_queued_work_without_workers(api_client: TestClient) -> None:

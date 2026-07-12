@@ -24,7 +24,7 @@ from aecontrol.models import (
     WorkerRecord,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class ArtifactStore:
@@ -131,6 +131,14 @@ class ArtifactStore:
                    required_labels JSONB NOT NULL DEFAULT '{}'::jsonb"""
             )
             connection.execute(
+                """ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS
+                   minimum_gpu_memory_mb INTEGER NOT NULL DEFAULT 0"""
+            )
+            connection.execute(
+                """ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS
+                   minimum_cuda_compute_capability DOUBLE PRECISION"""
+            )
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS workers (
                     worker_id TEXT PRIMARY KEY,
@@ -145,6 +153,8 @@ class ArtifactStore:
                 connection.execute(
                     "INSERT INTO schema_metadata(version) VALUES (%s)", (SCHEMA_VERSION,)
                 )
+            elif int(row["version"]) == 1:
+                connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif int(row["version"]) != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {row['version']}"
                 raise RuntimeError(msg)
@@ -337,6 +347,8 @@ class ArtifactStore:
         max_attempts: int = 3,
         required_accelerator: Accelerator = Accelerator.CPU,
         required_labels: dict[str, str] | None = None,
+        minimum_gpu_memory_mb: int = 0,
+        minimum_cuda_compute_capability: float | None = None,
     ) -> EvaluationJob:
         effective_labels = dict(required_labels or {})
         if agent_version.startswith("ollama/"):
@@ -356,6 +368,8 @@ class ArtifactStore:
             max_attempts=max_attempts,
             required_accelerator=required_accelerator,
             required_labels=effective_labels,
+            minimum_gpu_memory_mb=minimum_gpu_memory_mb,
+            minimum_cuda_compute_capability=minimum_cuda_compute_capability,
         )
         self.initialize()
         with self._connect() as connection:
@@ -363,8 +377,9 @@ class ArtifactStore:
                 """
                 INSERT INTO evaluation_jobs (
                     job_id, suite_path, agent_version, status, priority, attempts,
-                    max_attempts, created_at, updated_at, required_accelerator, required_labels
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    max_attempts, created_at, updated_at, required_accelerator, required_labels,
+                    minimum_gpu_memory_mb, minimum_cuda_compute_capability
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -379,6 +394,8 @@ class ArtifactStore:
                     job.updated_at,
                     job.required_accelerator.value,
                     Jsonb(job.required_labels),
+                    job.minimum_gpu_memory_mb,
+                    job.minimum_cuda_compute_capability,
                 ),
             ).fetchone()
         if row is None:
@@ -418,9 +435,21 @@ class ArtifactStore:
         self.initialize()
         accelerators = [Accelerator.CPU.value]
         labels: dict[str, str] = {}
+        gpu_profiles: list[dict[str, int | float]] = []
         if capabilities is not None:
             accelerators = [item.value for item in capabilities.accelerators]
             labels = capabilities.labels
+            for gpu in capabilities.gpus:
+                try:
+                    compute_capability = float(gpu.compute_capability)
+                except ValueError:
+                    continue
+                gpu_profiles.append(
+                    {
+                        "memory_total_mb": gpu.memory_total_mb,
+                        "compute_capability": compute_capability,
+                    }
+                )
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -430,6 +459,22 @@ class ArtifactStore:
                     WHERE attempts < max_attempts
                       AND required_accelerator = ANY(%s)
                       AND %s::jsonb @> required_labels
+                      AND (
+                        (
+                          minimum_gpu_memory_mb = 0
+                          AND minimum_cuda_compute_capability IS NULL
+                        )
+                        OR EXISTS (
+                          SELECT 1
+                          FROM jsonb_to_recordset(%s::jsonb)
+                            AS gpu(memory_total_mb INTEGER, compute_capability DOUBLE PRECISION)
+                          WHERE gpu.memory_total_mb >= minimum_gpu_memory_mb
+                            AND (
+                              minimum_cuda_compute_capability IS NULL
+                              OR gpu.compute_capability >= minimum_cuda_compute_capability
+                            )
+                        )
+                      )
                       AND (
                         status = 'queued'
                         OR (status = 'running' AND lease_expires_at < now())
@@ -449,7 +494,7 @@ class ArtifactStore:
                 WHERE jobs.job_id = claimable.job_id
                 RETURNING jobs.*
                 """,
-                (accelerators, Jsonb(labels), worker_id, lease_seconds),
+                (accelerators, Jsonb(labels), Jsonb(gpu_profiles), worker_id, lease_seconds),
             ).fetchone()
         return EvaluationJob.model_validate(row) if row is not None else None
 

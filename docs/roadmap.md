@@ -13,6 +13,7 @@ Implemented ahead of the original four-day scope:
 - OpenAI-compatible model runtime with local compatibility verification
 - Scoped API-key authentication with constant-time digest verification
 - Heartbeat-refreshed NVIDIA GPU telemetry and Prometheus device gauges
+- Atomic CUDA admission by per-device memory and compute capability
 
 Next stages:
 

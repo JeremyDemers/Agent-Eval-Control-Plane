@@ -28,6 +28,21 @@ inside the atomic lease query: the requested accelerator must be in the worker's
 and worker labels must contain every requested label. An incompatible worker never owns or increments
 the attempt count of a job it cannot execute.
 
+CUDA jobs can also require framebuffer capacity and compute capability. Both constraints must be
+satisfied by the same physical device; capacities from multiple GPUs are never combined. Admission
+remains part of the locked claim query, so underqualified workers leave the job queued without
+consuming an attempt.
+Existing schema-v1 databases are migrated in place to schema v2 when the service initializes.
+
+```bash
+uv run aecontrol jobs enqueue \
+  --suite examples/suites/coding_repair.yaml \
+  --agent-version candidate_fixed \
+  --accelerator cuda \
+  --minimum-gpu-memory-mb 12000 \
+  --minimum-cuda-compute-capability 8.9
+```
+
 GPU discovery is optional and fail-safe. Missing binaries, timeouts, command failures, and malformed
 device rows result in a CPU-only capability document. No synthetic GPU is reported. Operators can
 inspect discovery with `aecontrol hardware --json`, and the browser dashboard shows registered worker

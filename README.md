@@ -84,6 +84,9 @@ Workers also refresh NVIDIA GPU telemetry through `nvidia-smi` on lease heartbea
 temperature, and power gauges. Incompatible workers skip jobs without consuming an attempt. See
 [`docs/hardware-scheduling.md`](docs/hardware-scheduling.md) for the normalized capability contract.
 
+CUDA jobs may require minimum framebuffer capacity and compute capability. PostgreSQL admits a lease
+only when one GPU satisfies the complete request, preventing accidental cross-device aggregation.
+
 Use `make serve PORT=8001` when port `8000` is already occupied.
 
 ![PostgreSQL-backed control plane showing persisted runs and release decisions](docs/assets/control-plane-dashboard.png)

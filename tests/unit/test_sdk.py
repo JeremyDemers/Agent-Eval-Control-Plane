@@ -65,6 +65,8 @@ def test_sync_client_serializes_and_waits_for_job() -> None:
         "max_attempts": 3,
         "required_accelerator": "cpu",
         "required_labels": {"pool": "test"},
+        "minimum_gpu_memory_mb": 0,
+        "minimum_cuda_compute_capability": None,
     }
 
 

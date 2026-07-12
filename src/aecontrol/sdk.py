@@ -105,6 +105,8 @@ class AgentEvalClient:
         max_attempts: int = 3,
         accelerator: Accelerator = Accelerator.CPU,
         labels: dict[str, str] | None = None,
+        minimum_gpu_memory_mb: int = 0,
+        minimum_cuda_compute_capability: float | None = None,
     ) -> EvaluationJob:
         payload = {
             "suite_path": suite_path,
@@ -113,6 +115,8 @@ class AgentEvalClient:
             "max_attempts": max_attempts,
             "required_accelerator": accelerator.value,
             "required_labels": labels or {},
+            "minimum_gpu_memory_mb": minimum_gpu_memory_mb,
+            "minimum_cuda_compute_capability": minimum_cuda_compute_capability,
         }
         return EvaluationJob.model_validate(self.transport.request("POST", "/api/v1/jobs", payload))
 
@@ -205,6 +209,8 @@ class AsyncAgentEvalClient:
         max_attempts: int = 3,
         accelerator: Accelerator = Accelerator.CPU,
         labels: dict[str, str] | None = None,
+        minimum_gpu_memory_mb: int = 0,
+        minimum_cuda_compute_capability: float | None = None,
     ) -> EvaluationJob:
         return await asyncio.to_thread(
             self._sync.enqueue_job,
@@ -214,6 +220,8 @@ class AsyncAgentEvalClient:
             max_attempts=max_attempts,
             accelerator=accelerator,
             labels=labels,
+            minimum_gpu_memory_mb=minimum_gpu_memory_mb,
+            minimum_cuda_compute_capability=minimum_cuda_compute_capability,
         )
 
     async def get_job(self, job_id: UUID) -> EvaluationJob:

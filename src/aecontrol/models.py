@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 JsonValue = Any
 
@@ -292,6 +292,16 @@ class EvaluationJob(BaseModel):
     error: str | None = None
     required_accelerator: Accelerator = Accelerator.CPU
     required_labels: dict[str, str] = Field(default_factory=dict)
+    minimum_gpu_memory_mb: int = Field(default=0, ge=0)
+    minimum_cuda_compute_capability: float | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def gpu_constraints_require_cuda(self) -> EvaluationJob:
+        if (
+            self.minimum_gpu_memory_mb > 0 or self.minimum_cuda_compute_capability is not None
+        ) and self.required_accelerator != Accelerator.CUDA:
+            raise ValueError("GPU resource constraints require the cuda accelerator")
+        return self
 
 
 class GpuDevice(BaseModel):
