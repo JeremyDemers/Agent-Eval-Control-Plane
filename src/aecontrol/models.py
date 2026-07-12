@@ -276,6 +276,20 @@ class StoredComparisonSummary(BaseModel):
     aggregate_pass_rate_delta: float
 
 
+class ArtifactIntegrityItem(BaseModel):
+    artifact_type: Literal["run", "comparison"]
+    artifact_id: UUID
+    valid: bool
+    expected_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    actual_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ArtifactIntegrityReport(BaseModel):
+    checked: int = Field(ge=0)
+    valid: int = Field(ge=0)
+    failures: list[ArtifactIntegrityItem]
+
+
 class EvaluationJob(BaseModel):
     job_id: UUID = Field(default_factory=uuid4)
     suite_path: str

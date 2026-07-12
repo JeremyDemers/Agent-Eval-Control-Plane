@@ -111,6 +111,7 @@ def test_client_collections_operations_and_cancellation() -> None:
     transport.add("DELETE", f"/api/v1/jobs/{job_id}", cancelled)
     transport.add("GET", "/api/v1/runs", [])
     transport.add("GET", "/api/v1/comparisons", [])
+    transport.add("GET", "/api/v1/integrity", {"checked": 2, "valid": 2, "failures": []})
     transport.add(
         "GET",
         "/api/v1/operations",
@@ -132,6 +133,7 @@ def test_client_collections_operations_and_cancellation() -> None:
     assert client.list_runs() == []
     assert client.list_comparisons() == []
     assert client.operations().job_counts == {"cancelled": 1}
+    assert client.verify_artifacts().valid == 2
 
 
 def test_wait_validation_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:

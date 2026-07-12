@@ -22,8 +22,10 @@ from aecontrol.auth import Authenticator, Principal
 from aecontrol.compare import compare_runs
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
+from aecontrol.integrity import ArtifactIntegrityError
 from aecontrol.models import (
     Accelerator,
+    ArtifactIntegrityReport,
     CaseResult,
     EvaluationJob,
     EvaluationRun,
@@ -158,6 +160,12 @@ def create_app(
     @application.get("/api/v1/operations", response_model=OperationalSnapshot, tags=["operations"])
     def operations(_principal: Principal = Depends(require_read)) -> OperationalSnapshot:
         return store.operational_snapshot()
+
+    @application.get(
+        "/api/v1/integrity", response_model=ArtifactIntegrityReport, tags=["operations"]
+    )
+    def integrity(_principal: Principal = Depends(require_read)) -> ArtifactIntegrityReport:
+        return store.verify_artifacts()
 
     @application.get("/api/v1/runs", response_model=list[StoredRunSummary], tags=["runs"])
     def list_runs(
@@ -307,6 +315,8 @@ def create_app(
             return store.get_comparison(comparison_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="comparison was not found") from error
+        except ArtifactIntegrityError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)
     def dashboard() -> str:
@@ -326,6 +336,8 @@ def create_app(
             artifact = store.get_comparison(comparison_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="comparison was not found") from error
+        except ArtifactIntegrityError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         return _render_comparison(artifact)
 
     return application
@@ -343,6 +355,8 @@ def _get_run(store: ArtifactStore, run_id: UUID) -> EvaluationRun:
         return store.get_run(run_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail="run was not found") from error
+    except ArtifactIntegrityError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 def _page(title: str, body: str) -> str:

@@ -15,6 +15,7 @@ Implemented ahead of the original four-day scope:
 - Heartbeat-refreshed NVIDIA GPU telemetry and Prometheus device gauges
 - Atomic CUDA admission by per-device memory and compute capability
 - Explainable queue placement diagnostics across API, CLI, dashboard, and SDK
+- Canonical SHA-256 integrity verification for persisted evaluation evidence
 
 Next stages:
 
@@ -22,4 +23,4 @@ Next stages:
 - Kubernetes sharded jobs
 - Hosted provider authentication and endpoint-specific adapters
 - NeMo and LangGraph interoperability packages
-- Multi-tenancy, object storage, distributed metrics, and tracing
+- Multi-tenancy, signed immutable object storage, distributed metrics, and tracing

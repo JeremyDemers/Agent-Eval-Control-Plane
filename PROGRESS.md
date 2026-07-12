@@ -52,13 +52,14 @@
 - Heartbeat-refreshed NVIDIA GPU utilization, memory, temperature, and power telemetry.
 - Atomic per-device CUDA admission using memory and compute-capability requirements.
 - Explainable queue placement diagnostics with per-worker blocker analysis.
+- Tamper-evident run and comparison payloads with full-store integrity audits.
 
 ## Verification
 
 - `uv sync --extra dev`: passed.
 - `uv run ruff format . && uv run ruff check .`: passed.
 - `uv run mypy`: passed with strict settings.
-- `uv run pytest`: 67 passed, 85.77% total coverage with an enforced 85% floor, including PostgreSQL/API, schema migration, authentication, GPU telemetry, admission and diagnostics, worker, Ollama, OpenAI-compatible runtime, sandbox, observability, and SDK tests.
+- `uv run pytest`: 69 passed, 85.67% total coverage with an enforced 85% floor, including PostgreSQL/API, schema migration, artifact integrity, authentication, GPU telemetry, admission and diagnostics, worker, Ollama, OpenAI-compatible runtime, sandbox, observability, and SDK tests.
 - `make demo`: passed; regressed candidate produced BLOCK, fixed candidate produced PASS.
 - `make docker-build && make docker-demo`: passed with native Podman.
 - `make sandbox-demo`: 4/4 cases passed through networkless, read-only rootless Podman containers.
