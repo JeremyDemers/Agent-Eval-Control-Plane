@@ -31,3 +31,8 @@ and a dedicated hardened worker boundary.
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
 development-only tools so its result describes the shipped runtime environment. As of the v0.15.0
 post-release audit, no known runtime dependency vulnerabilities were reported.
+
+API suite and policy paths are resolved before use and must remain under `AECONTROL_INPUT_ROOT`, which
+defaults to the repository's `examples/` directory. Resolution occurs before the boundary check, so
+absolute paths, `..` traversal, and symlinks cannot escape the configured root. The local CLI remains
+an operator-trust interface and may intentionally read explicit paths supplied by the same user.

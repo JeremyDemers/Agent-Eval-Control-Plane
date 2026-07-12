@@ -104,6 +104,7 @@ Use `make serve PORT=8001` when port `8000` is already occupied.
 ![PostgreSQL-backed control plane showing persisted runs and release decisions](docs/assets/control-plane-dashboard.png)
 
 Set `DATABASE_URL` to use an existing PostgreSQL deployment. The default is shown in `.env.example`.
+API suite and policy files are restricted to `AECONTROL_INPUT_ROOT`, which defaults to `examples/`.
 
 Operational endpoints provide database health, queue-aware readiness, Prometheus-compatible metrics,
 and correlated request timing:
