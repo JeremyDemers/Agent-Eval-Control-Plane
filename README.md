@@ -227,6 +227,19 @@ AECONTROL_AUTH_CONFIG=auth.yaml make serve
 
 See [`docs/authentication.md`](docs/authentication.md) for configuration and rotation guidance.
 
+## Tamper-Evident Artifacts
+
+Persisted runs and comparisons carry canonical SHA-256 digests. Reads fail closed on a mismatch, and
+operators can audit the full evidence store without returning artifact payloads.
+
+```bash
+uv run aecontrol store verify
+curl http://127.0.0.1:8000/api/v1/integrity
+```
+
+Schema v3 backfills existing PostgreSQL artifacts in place. See
+[`docs/artifact-integrity.md`](docs/artifact-integrity.md) for the threat model and signature limits.
+
 ## Current Limitations
 
 The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not

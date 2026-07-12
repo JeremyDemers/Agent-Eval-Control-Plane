@@ -230,6 +230,22 @@ def store_list_runs(
         )
 
 
+@store_app.command("verify")
+def store_verify(
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    report = ArtifactStore(database_url).verify_artifacts()
+    if json_output:
+        console.print(report.model_dump_json(indent=2))
+    else:
+        console.print(f"artifact integrity: {report.valid}/{report.checked} valid")
+        for failure in report.failures:
+            console.print(f"- {failure.artifact_type} {failure.artifact_id}: SHA-256 mismatch")
+    if report.failures:
+        raise typer.Exit(1)
+
+
 @store_app.command("compare")
 def store_compare(
     baseline_run_id: UUID = typer.Option(..., "--baseline-run-id"),

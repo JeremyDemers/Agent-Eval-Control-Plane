@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from threading import Lock
+from typing import Literal, cast
 from uuid import UUID
 
 import psycopg
@@ -9,8 +10,11 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from aecontrol.integrity import ArtifactIntegrityError, artifact_digest
 from aecontrol.models import (
     Accelerator,
+    ArtifactIntegrityItem,
+    ArtifactIntegrityReport,
     EvaluationJob,
     EvaluationRun,
     JobPlacementDiagnostic,
@@ -26,7 +30,7 @@ from aecontrol.models import (
 )
 from aecontrol.placement import diagnose_placement
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class ArtifactStore:
@@ -81,6 +85,9 @@ class ArtifactStore:
                    ON evaluation_runs(completed_at DESC)"""
             )
             connection.execute(
+                "ALTER TABLE evaluation_runs ADD COLUMN IF NOT EXISTS payload_sha256 TEXT"
+            )
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS comparisons (
                     comparison_id UUID PRIMARY KEY,
@@ -97,6 +104,9 @@ class ArtifactStore:
             connection.execute(
                 """CREATE INDEX IF NOT EXISTS idx_comparisons_created_at
                    ON comparisons(created_at DESC)"""
+            )
+            connection.execute(
+                "ALTER TABLE comparisons ADD COLUMN IF NOT EXISTS payload_sha256 TEXT"
             )
             connection.execute(
                 """
@@ -150,12 +160,17 @@ class ArtifactStore:
                 )
                 """
             )
+            self._backfill_artifact_digests(connection)
+            connection.execute(
+                "ALTER TABLE evaluation_runs ALTER COLUMN payload_sha256 SET NOT NULL"
+            )
+            connection.execute("ALTER TABLE comparisons ALTER COLUMN payload_sha256 SET NOT NULL")
             row = connection.execute("SELECT version FROM schema_metadata LIMIT 1").fetchone()
             if row is None:
                 connection.execute(
                     "INSERT INTO schema_metadata(version) VALUES (%s)", (SCHEMA_VERSION,)
                 )
-            elif int(row["version"]) == 1:
+            elif int(row["version"]) in {1, 2}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif int(row["version"]) != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {row['version']}"
@@ -166,13 +181,15 @@ class ArtifactStore:
         case_count = len(run.case_results)
         hidden_passes = sum(result.hidden_success for result in run.case_results)
         hidden_pass_rate = hidden_passes / case_count if case_count else 0.0
+        payload = run.model_dump(mode="json")
+        digest = artifact_digest(payload)
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO evaluation_runs (
                     run_id, suite_name, dataset_name, dataset_version, agent_version,
-                    started_at, completed_at, case_count, hidden_pass_rate, payload
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    started_at, completed_at, case_count, hidden_pass_rate, payload, payload_sha256
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(run_id) DO UPDATE SET
                     suite_name = excluded.suite_name,
                     dataset_name = excluded.dataset_name,
@@ -182,7 +199,8 @@ class ArtifactStore:
                     completed_at = excluded.completed_at,
                     case_count = excluded.case_count,
                     hidden_pass_rate = excluded.hidden_pass_rate,
-                    payload = excluded.payload
+                    payload = excluded.payload,
+                    payload_sha256 = excluded.payload_sha256
                 """,
                 (
                     run.run_id,
@@ -194,7 +212,8 @@ class ArtifactStore:
                     run.completed_at,
                     case_count,
                     hidden_pass_rate,
-                    Jsonb(run.model_dump(mode="json")),
+                    Jsonb(payload),
+                    digest,
                 ),
             )
 
@@ -202,10 +221,11 @@ class ArtifactStore:
         self.initialize()
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT payload FROM evaluation_runs WHERE run_id = %s", (run_id,)
+                "SELECT payload, payload_sha256 FROM evaluation_runs WHERE run_id = %s", (run_id,)
             ).fetchone()
         if row is None:
             raise KeyError(str(run_id))
+        self._verify_artifact("run", run_id, row["payload_sha256"], row["payload"])
         return EvaluationRun.model_validate(row["payload"])
 
     def list_runs(self, limit: int = 100) -> list[StoredRunSummary]:
@@ -226,13 +246,15 @@ class ArtifactStore:
     ) -> StoredComparison:
         self.initialize()
         artifact = StoredComparison(comparison=comparison, decision=decision)
+        payload = artifact.model_dump(mode="json")
+        digest = artifact_digest(payload)
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO comparisons (
                     comparison_id, baseline_run_id, candidate_run_id, created_at,
-                    outcome, paired_cases, aggregate_pass_rate_delta, payload
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    outcome, paired_cases, aggregate_pass_rate_delta, payload, payload_sha256
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     artifact.comparison_id,
@@ -242,7 +264,8 @@ class ArtifactStore:
                     decision.outcome,
                     comparison.paired_cases,
                     comparison.aggregate_pass_rate_delta,
-                    Jsonb(artifact.model_dump(mode="json")),
+                    Jsonb(payload),
+                    digest,
                 ),
             )
         return artifact
@@ -251,12 +274,46 @@ class ArtifactStore:
         self.initialize()
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT payload FROM comparisons WHERE comparison_id = %s",
+                "SELECT payload, payload_sha256 FROM comparisons WHERE comparison_id = %s",
                 (comparison_id,),
             ).fetchone()
         if row is None:
             raise KeyError(str(comparison_id))
+        self._verify_artifact("comparison", comparison_id, row["payload_sha256"], row["payload"])
         return StoredComparison.model_validate(row["payload"])
+
+    def verify_artifacts(self) -> ArtifactIntegrityReport:
+        self.initialize()
+        failures: list[ArtifactIntegrityItem] = []
+        checked = 0
+        with self._connect() as connection:
+            sources: tuple[tuple[str, str, Literal["run", "comparison"]], ...] = (
+                ("evaluation_runs", "run_id", "run"),
+                ("comparisons", "comparison_id", "comparison"),
+            )
+            for table, id_column, artifact_type in sources:
+                rows = connection.execute(
+                    sql.SQL("SELECT {}, payload, payload_sha256 FROM {}").format(
+                        sql.Identifier(id_column), sql.Identifier(table)
+                    )
+                ).fetchall()
+                checked += len(rows)
+                for row in rows:
+                    actual = artifact_digest(row["payload"])
+                    expected = str(row["payload_sha256"])
+                    if actual != expected:
+                        failures.append(
+                            ArtifactIntegrityItem(
+                                artifact_type=artifact_type,
+                                artifact_id=cast(UUID, row[id_column]),
+                                valid=False,
+                                expected_sha256=expected,
+                                actual_sha256=actual,
+                            )
+                        )
+        return ArtifactIntegrityReport(
+            checked=checked, valid=checked - len(failures), failures=failures
+        )
 
     def list_comparisons(self, limit: int = 100) -> list[StoredComparisonSummary]:
         self.initialize()
@@ -597,6 +654,39 @@ class ArtifactStore:
             msg = f"worker no longer owns the lease for job {job_id}"
             raise RuntimeError(msg)
         return EvaluationJob.model_validate(row)
+
+    @staticmethod
+    def _verify_artifact(
+        artifact_type: str,
+        artifact_id: UUID,
+        expected_value: object,
+        payload: object,
+    ) -> None:
+        expected = str(expected_value)
+        actual = artifact_digest(payload)
+        if actual != expected:
+            raise ArtifactIntegrityError(artifact_type, artifact_id, expected, actual)
+
+    @staticmethod
+    def _backfill_artifact_digests(
+        connection: psycopg.Connection[dict[str, object]],
+    ) -> None:
+        for table, id_column in (
+            ("evaluation_runs", "run_id"),
+            ("comparisons", "comparison_id"),
+        ):
+            rows = connection.execute(
+                sql.SQL("SELECT {}, payload FROM {} WHERE payload_sha256 IS NULL").format(
+                    sql.Identifier(id_column), sql.Identifier(table)
+                )
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    sql.SQL("UPDATE {} SET payload_sha256 = %s WHERE {} = %s").format(
+                        sql.Identifier(table), sql.Identifier(id_column)
+                    ),
+                    (artifact_digest(row["payload"]), row[id_column]),
+                )
 
     def _connect(self) -> psycopg.Connection[dict[str, object]]:
         connection = psycopg.connect(self.database_url, row_factory=dict_row)

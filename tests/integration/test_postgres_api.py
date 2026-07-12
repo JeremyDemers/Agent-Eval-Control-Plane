@@ -48,7 +48,7 @@ def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 2
+        assert store.health()["schema_version"] == 3
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -116,7 +116,7 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 2
+    assert health.json()["schema_version"] == 3
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["server-timing"].startswith("app;dur=")
 
@@ -178,6 +178,43 @@ def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) 
     assert metrics.status_code == 200
     assert "aecontrol_runs_total 2" in metrics.text
     assert 'aecontrol_gate_decisions{outcome="BLOCK"} 1' in metrics.text
+
+    integrity = api_client.get("/api/v1/integrity")
+    assert integrity.status_code == 200
+    assert integrity.json() == {"checked": 3, "valid": 3, "failures": []}
+
+
+def test_tampered_artifact_is_reported_and_blocked(api_client: TestClient) -> None:
+    created = api_client.post(
+        "/api/v1/evaluations",
+        json={
+            "suite_path": "examples/suites/coding_repair.yaml",
+            "agent_version": "baseline",
+        },
+    )
+    assert created.status_code == 201
+    run_id = created.json()["run_id"]
+    store: ArtifactStore = api_client.app.state.store
+    with psycopg.connect(store.database_url) as connection:
+        connection.execute(
+            sql.SQL(
+                "UPDATE {}.evaluation_runs "
+                "SET payload = jsonb_set(payload, '{{agent_version}}', %s::jsonb) "
+                "WHERE run_id = %s"
+            ).format(sql.Identifier(store.schema)),
+            ('"tampered"', run_id),
+        )
+
+    report = api_client.get("/api/v1/integrity")
+    assert report.status_code == 200
+    assert report.json()["checked"] == 1
+    assert report.json()["valid"] == 0
+    assert report.json()["failures"][0]["artifact_id"] == run_id
+    assert report.json()["failures"][0]["artifact_type"] == "run"
+
+    blocked = api_client.get(f"/api/v1/runs/{run_id}")
+    assert blocked.status_code == 409
+    assert "failed SHA-256 integrity verification" in blocked.json()["detail"]
 
 
 def test_api_returns_actionable_not_found_responses(api_client: TestClient) -> None:

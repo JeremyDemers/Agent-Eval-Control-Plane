@@ -13,6 +13,7 @@ from uuid import UUID
 
 from aecontrol.models import (
     Accelerator,
+    ArtifactIntegrityReport,
     EvaluationJob,
     EvaluationRun,
     JobPlacementDiagnostic,
@@ -95,6 +96,11 @@ class AgentEvalClient:
     def operations(self) -> OperationalSnapshot:
         return OperationalSnapshot.model_validate(
             self.transport.request("GET", "/api/v1/operations")
+        )
+
+    def verify_artifacts(self) -> ArtifactIntegrityReport:
+        return ArtifactIntegrityReport.model_validate(
+            self.transport.request("GET", "/api/v1/integrity")
         )
 
     def enqueue_job(
@@ -205,6 +211,9 @@ class AsyncAgentEvalClient:
 
     async def health(self) -> JsonObject:
         return await asyncio.to_thread(self._sync.health)
+
+    async def verify_artifacts(self) -> ArtifactIntegrityReport:
+        return await asyncio.to_thread(self._sync.verify_artifacts)
 
     async def enqueue_job(
         self,

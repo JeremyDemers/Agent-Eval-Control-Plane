@@ -14,13 +14,15 @@ job = client.enqueue_job(
     labels={"runtime": "deterministic"},
 )
 placement = client.explain_job(job.job_id)
+integrity = client.verify_artifacts()
 completed = client.wait_for_job(job.job_id)
 run = client.get_run(completed.run_id) if completed.run_id else None
 ```
 
 `AsyncAgentEvalClient` provides matching coroutine methods and uses non-blocking polling for terminal
 job state. Both clients support health and operational snapshots, direct evaluations, job listing,
-placement diagnostics and cancellation, run retrieval, and comparison creation/retrieval.
+placement diagnostics, artifact-integrity audits and cancellation, run retrieval, and comparison
+creation/retrieval.
 
 The default HTTP transport accepts only absolute HTTP(S) URLs, supports caller-generated request IDs,
 normalizes structured API and connection failures into `AgentEvalAPIError`, and rejects malformed JSON
