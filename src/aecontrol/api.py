@@ -61,6 +61,8 @@ class EvaluationJobRequest(BaseModel):
     max_attempts: int = Field(default=3, ge=1, le=10)
     required_accelerator: Accelerator = Accelerator.CPU
     required_labels: dict[str, str] = Field(default_factory=dict)
+    minimum_gpu_memory_mb: int = Field(default=0, ge=0)
+    minimum_cuda_compute_capability: float | None = Field(default=None, ge=1)
 
 
 def create_app(
@@ -192,6 +194,8 @@ def create_app(
                 request.max_attempts,
                 request.required_accelerator,
                 request.required_labels,
+                request.minimum_gpu_memory_mb,
+                request.minimum_cuda_compute_capability,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -385,7 +389,7 @@ def _render_dashboard(
     job_rows = (
         "".join(
             f"<tr><td>{str(row.job_id)[:8]}</td><td>{escape(row.agent_version)}</td>"
-            f"<td class='{row.status}'>{row.status}</td><td>{row.required_accelerator}</td><td>{row.priority}</td>"
+            f"<td class='{row.status}'>{row.status}</td><td>{escape(_job_requirement(row))}</td><td>{row.priority}</td>"
             f"<td>{row.attempts}/{row.max_attempts}</td>"
             f"<td>{escape(row.lease_owner or '-')}</td></tr>"
             for row in jobs
@@ -427,6 +431,15 @@ def _gpu_summary(gpu: GpuDevice) -> str:
         telemetry.append(f"{gpu.temperature_celsius:.0f} C")
     suffix = f" ({', '.join(telemetry)})" if telemetry else ""
     return f"GPU {gpu.index}: {gpu.name}{suffix}"
+
+
+def _job_requirement(job: EvaluationJob) -> str:
+    requirements = [job.required_accelerator.value]
+    if job.minimum_gpu_memory_mb:
+        requirements.append(f">={job.minimum_gpu_memory_mb} MiB")
+    if job.minimum_cuda_compute_capability is not None:
+        requirements.append(f"CC >={job.minimum_cuda_compute_capability:g}")
+    return ", ".join(requirements)
 
 
 def _render_run(run: EvaluationRun) -> str:

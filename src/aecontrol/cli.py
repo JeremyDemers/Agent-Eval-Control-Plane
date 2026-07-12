@@ -250,11 +250,22 @@ def jobs_enqueue(
     priority: int = typer.Option(0, "--priority", min=-100, max=100),
     max_attempts: int = typer.Option(3, "--max-attempts", min=1, max=10),
     accelerator: Accelerator = typer.Option(Accelerator.CPU, "--accelerator"),
+    minimum_gpu_memory_mb: int = typer.Option(0, "--minimum-gpu-memory-mb", min=0),
+    minimum_cuda_compute_capability: float | None = typer.Option(
+        None, "--minimum-cuda-compute-capability", min=1
+    ),
     label: list[str] | None = typer.Option(None, "--label"),
     database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
 ) -> None:
     job = ArtifactStore(database_url).enqueue_job(
-        str(suite), agent_version, priority, max_attempts, accelerator, _parse_labels(label)
+        str(suite),
+        agent_version,
+        priority,
+        max_attempts,
+        accelerator,
+        _parse_labels(label),
+        minimum_gpu_memory_mb,
+        minimum_cuda_compute_capability,
     )
     console.print(f"queued job {job.job_id} ({job.agent_version})")
 
@@ -270,9 +281,15 @@ def jobs_list(
         console.print(json.dumps([job.model_dump(mode="json") for job in jobs], indent=2))
         return
     for job in jobs:
+        gpu_requirement = ""
+        if job.minimum_gpu_memory_mb or job.minimum_cuda_compute_capability is not None:
+            gpu_requirement = (
+                f" gpu_memory>={job.minimum_gpu_memory_mb}MiB"
+                f" compute_capability>={job.minimum_cuda_compute_capability or 0:g}"
+            )
         console.print(
             f"{job.job_id} {job.status} {job.agent_version} "
-            f"priority={job.priority} attempts={job.attempts}/{job.max_attempts}"
+            f"priority={job.priority} attempts={job.attempts}/{job.max_attempts}{gpu_requirement}"
         )
 
 
