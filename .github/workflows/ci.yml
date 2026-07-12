@@ -25,8 +25,8 @@ jobs:
     env:
       DATABASE_URL: postgresql://aecontrol:aecontrol@127.0.0.1:5432/aecontrol
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
       - run: uv sync --extra dev
       - run: uv run ruff format --check .
       - run: uv run ruff check .
