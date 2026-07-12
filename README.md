@@ -100,6 +100,22 @@ curl http://127.0.0.1:8000/metrics
 
 See [`docs/operations.md`](docs/operations.md) for metric semantics and request-ID behavior.
 
+## Python SDK
+
+The package exports typed synchronous and asynchronous clients for evaluations, durable jobs, runs,
+comparisons, cancellation, waiting, health, and operations.
+
+```python
+from aecontrol import AgentEvalClient
+
+client = AgentEvalClient("http://127.0.0.1:8000")
+job = client.enqueue_job("examples/suites/coding_repair.yaml", "candidate_fixed")
+completed = client.wait_for_job(job.job_id)
+```
+
+Run `make sdk-demo` for a self-contained live example. See [`docs/sdk.md`](docs/sdk.md) for sync and
+async usage.
+
 ## Architecture
 
 ```mermaid

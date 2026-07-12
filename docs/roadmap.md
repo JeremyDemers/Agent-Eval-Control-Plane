@@ -9,10 +9,10 @@ Implemented ahead of the original four-day scope:
 - Capability-aware CPU/CUDA placement and registered worker inventory
 - Optional Ollama coding runtime with structured output and provenance
 - Resource-limited process sandbox and rootless networkless Podman execution backend
+- Typed synchronous and asynchronous Python SDK
 
 Next stages:
 
-- Python SDK client
 - Pinned sandbox images with seccomp/AppArmor and microVM isolation
 - Kubernetes sharded jobs
 - OpenAI-compatible and hosted LLM runtime adapters
