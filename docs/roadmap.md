@@ -14,6 +14,7 @@ Implemented ahead of the original four-day scope:
 - Scoped API-key authentication with constant-time digest verification
 - Heartbeat-refreshed NVIDIA GPU telemetry and Prometheus device gauges
 - Atomic CUDA admission by per-device memory and compute capability
+- Explainable queue placement diagnostics across API, CLI, dashboard, and SDK
 
 Next stages:
 

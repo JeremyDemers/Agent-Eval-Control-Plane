@@ -333,6 +333,26 @@ class WorkerRecord(BaseModel):
     last_seen_at: datetime
 
 
+class WorkerPlacementDiagnostic(BaseModel):
+    worker_id: str
+    active: bool
+    eligible: bool
+    last_seen_at: datetime
+    reasons: list[str]
+
+
+class JobPlacementDiagnostic(BaseModel):
+    job_id: UUID
+    job_status: JobStatus
+    observed_at: datetime
+    active_worker_window_seconds: int = Field(gt=0)
+    schedulable: bool
+    active_workers: int = Field(ge=0)
+    matching_workers: int = Field(ge=0)
+    blockers: list[str]
+    workers: list[WorkerPlacementDiagnostic]
+
+
 class OperationalSnapshot(BaseModel):
     runs_total: int = Field(ge=0)
     comparisons_total: int = Field(ge=0)

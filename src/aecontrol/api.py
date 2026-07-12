@@ -28,6 +28,7 @@ from aecontrol.models import (
     EvaluationJob,
     EvaluationRun,
     GpuDevice,
+    JobPlacementDiagnostic,
     JobStatus,
     OperationalSnapshot,
     StoredComparison,
@@ -216,6 +217,19 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
+    @application.get(
+        "/api/v1/jobs/{job_id}/placement",
+        response_model=JobPlacementDiagnostic,
+        tags=["jobs"],
+    )
+    def job_placement(
+        job_id: UUID, _principal: Principal = Depends(require_read)
+    ) -> JobPlacementDiagnostic:
+        try:
+            return store.placement_diagnostic(job_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="job was not found") from error
+
     @application.get("/api/v1/workers", response_model=list[WorkerRecord], tags=["workers"])
     def list_workers(_principal: Principal = Depends(require_read)) -> list[WorkerRecord]:
         return store.list_workers()
@@ -388,7 +402,8 @@ def _render_dashboard(
     )
     job_rows = (
         "".join(
-            f"<tr><td>{str(row.job_id)[:8]}</td><td>{escape(row.agent_version)}</td>"
+            f"<tr><td><a href='/api/v1/jobs/{row.job_id}/placement'>{str(row.job_id)[:8]}</a></td>"
+            f"<td>{escape(row.agent_version)}</td>"
             f"<td class='{row.status}'>{row.status}</td><td>{escape(_job_requirement(row))}</td><td>{row.priority}</td>"
             f"<td>{row.attempts}/{row.max_attempts}</td>"
             f"<td>{escape(row.lease_owner or '-')}</td></tr>"

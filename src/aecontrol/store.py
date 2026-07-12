@@ -13,6 +13,7 @@ from aecontrol.models import (
     Accelerator,
     EvaluationJob,
     EvaluationRun,
+    JobPlacementDiagnostic,
     JobStatus,
     OperationalSnapshot,
     QualityGateDecision,
@@ -23,6 +24,7 @@ from aecontrol.models import (
     WorkerCapabilities,
     WorkerRecord,
 )
+from aecontrol.placement import diagnose_placement
 
 SCHEMA_VERSION = 2
 
@@ -425,6 +427,9 @@ class ArtifactStore:
         with self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
         return [EvaluationJob.model_validate(row) for row in rows]
+
+    def placement_diagnostic(self, job_id: UUID) -> JobPlacementDiagnostic:
+        return diagnose_placement(self.get_job(job_id), self.list_workers())
 
     def lease_job(
         self,
