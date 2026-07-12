@@ -79,8 +79,9 @@ and prevents stale workers from acknowledging work they no longer own. See
 [`docs/distributed-execution.md`](docs/distributed-execution.md) for the state machine and delivery
 semantics.
 
-Workers also perform optional NVIDIA GPU discovery through `nvidia-smi`. Jobs can request `cpu` or
-`cuda` and exact-match pool labels; incompatible workers skip them without consuming an attempt. See
+Workers also refresh NVIDIA GPU telemetry through `nvidia-smi` on lease heartbeats. Jobs can request
+`cpu` or `cuda` and exact-match pool labels; Prometheus exposes per-device memory, utilization,
+temperature, and power gauges. Incompatible workers skip jobs without consuming an attempt. See
 [`docs/hardware-scheduling.md`](docs/hardware-scheduling.md) for the normalized capability contract.
 
 Use `make serve PORT=8001` when port `8000` is already occupied.

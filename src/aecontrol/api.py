@@ -27,6 +27,7 @@ from aecontrol.models import (
     CaseResult,
     EvaluationJob,
     EvaluationRun,
+    GpuDevice,
     JobStatus,
     OperationalSnapshot,
     StoredComparison,
@@ -147,7 +148,7 @@ def create_app(
     @application.get("/metrics", include_in_schema=False)
     def metrics() -> PlainTextResponse:
         return PlainTextResponse(
-            render_prometheus(store.operational_snapshot()),
+            render_prometheus(store.operational_snapshot(), store.list_workers()),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
@@ -395,7 +396,7 @@ def _render_dashboard(
         "".join(
             f"<tr><td>{escape(row.worker_id)}</td><td>{escape(row.capabilities.hostname)}</td>"
             f"<td>{escape(', '.join(item.value for item in row.capabilities.accelerators))}</td>"
-            f"<td>{escape(', '.join(gpu.name for gpu in row.capabilities.gpus) or '-')}</td>"
+            f"<td>{escape(', '.join(_gpu_summary(gpu) for gpu in row.capabilities.gpus) or '-')}</td>"
             f"<td>{row.last_seen_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>"
             for row in workers
         )
@@ -414,6 +415,18 @@ def _render_dashboard(
 <h2>Recent Runs</h2><table><thead><tr><th>Agent</th><th>Suite</th><th>Cases</th><th>Hidden pass</th><th>Completed</th></tr></thead><tbody>{run_rows}</tbody></table>
 <h2>Release Decisions</h2><table><thead><tr><th>ID</th><th>Gate</th><th>Pairs</th><th>Delta</th><th>Created</th></tr></thead><tbody>{comparison_rows}</tbody></table>""",
     )
+
+
+def _gpu_summary(gpu: GpuDevice) -> str:
+    telemetry: list[str] = []
+    if gpu.utilization_percent is not None:
+        telemetry.append(f"{gpu.utilization_percent:.0f}% util")
+    if gpu.memory_used_mb is not None:
+        telemetry.append(f"{gpu.memory_used_mb}/{gpu.memory_total_mb} MiB")
+    if gpu.temperature_celsius is not None:
+        telemetry.append(f"{gpu.temperature_celsius:.0f} C")
+    suffix = f" ({', '.join(telemetry)})" if telemetry else ""
+    return f"GPU {gpu.index}: {gpu.name}{suffix}"
 
 
 def _render_run(run: EvaluationRun) -> str:

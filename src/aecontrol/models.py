@@ -295,9 +295,15 @@ class EvaluationJob(BaseModel):
 
 
 class GpuDevice(BaseModel):
+    index: int = Field(default=0, ge=0)
+    uuid: str = ""
     name: str
     memory_total_mb: int = Field(ge=0)
     compute_capability: str
+    memory_used_mb: int | None = Field(default=None, ge=0)
+    utilization_percent: float | None = Field(default=None, ge=0, le=100)
+    temperature_celsius: float | None = None
+    power_draw_watts: float | None = Field(default=None, ge=0)
 
 
 class WorkerCapabilities(BaseModel):

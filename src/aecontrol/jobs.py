@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 
 from aecontrol.engine import EvaluationEngine, load_suite
@@ -18,6 +19,7 @@ class EvaluationWorker:
         worker_id: str,
         lease_seconds: int = 120,
         capabilities: WorkerCapabilities | None = None,
+        capability_provider: Callable[[], WorkerCapabilities] | None = None,
     ) -> None:
         if lease_seconds < 3:
             msg = "lease_seconds must be at least 3"
@@ -25,12 +27,24 @@ class EvaluationWorker:
         self.store = store
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
-        self.capabilities = capabilities or detect_worker_capabilities()
+        if capabilities is not None and capability_provider is not None:
+            raise ValueError("provide capabilities or capability_provider, not both")
+        self._capability_provider = capability_provider
+        if capabilities is None:
+            self._capability_provider = capability_provider or detect_worker_capabilities
+            capabilities = self._capability_provider()
+        self.capabilities = capabilities
+
+    def _refresh_capabilities(self) -> WorkerCapabilities:
+        if self._capability_provider is not None:
+            self.capabilities = self._capability_provider()
+        return self.capabilities
 
     async def run_once(self) -> EvaluationJob | None:
-        await asyncio.to_thread(self.store.register_worker, self.worker_id, self.capabilities)
+        capabilities = await asyncio.to_thread(self._refresh_capabilities)
+        await asyncio.to_thread(self.store.register_worker, self.worker_id, capabilities)
         job = await asyncio.to_thread(
-            self.store.lease_job, self.worker_id, self.lease_seconds, self.capabilities
+            self.store.lease_job, self.worker_id, self.lease_seconds, capabilities
         )
         if job is None:
             return None
@@ -71,8 +85,9 @@ class EvaluationWorker:
                 await asyncio.wait_for(stop.wait(), timeout=interval)
             except TimeoutError:
                 try:
+                    capabilities = await asyncio.to_thread(self._refresh_capabilities)
                     await asyncio.to_thread(
-                        self.store.register_worker, self.worker_id, self.capabilities
+                        self.store.register_worker, self.worker_id, capabilities
                     )
                     await asyncio.to_thread(
                         self.store.renew_job_lease,

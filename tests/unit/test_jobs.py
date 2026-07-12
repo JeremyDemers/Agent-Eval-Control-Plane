@@ -50,6 +50,31 @@ async def test_worker_reports_empty_queue_and_validates_settings() -> None:
         await worker.run_forever(0)
     with pytest.raises(ValueError, match="lease_seconds must be at least 3"):
         EvaluationWorker(store, "worker-1", lease_seconds=2)
+    with pytest.raises(ValueError, match="capabilities or capability_provider"):
+        EvaluationWorker(
+            store,
+            "worker-1",
+            capabilities=detect_worker_capabilities(),
+            capability_provider=detect_worker_capabilities,
+        )
+
+
+@pytest.mark.asyncio
+async def test_worker_refreshes_dynamic_capabilities() -> None:
+    fake_store = FakeStore()
+    snapshots = iter(
+        [
+            detect_worker_capabilities({"sample": "initial"}),
+            detect_worker_capabilities({"sample": "refreshed"}),
+        ]
+    )
+    worker = EvaluationWorker(
+        cast(ArtifactStore, fake_store), "worker-1", capability_provider=lambda: next(snapshots)
+    )
+
+    await worker.run_once()
+
+    assert worker.capabilities.labels == {"sample": "refreshed"}
 
 
 @pytest.mark.asyncio
