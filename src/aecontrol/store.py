@@ -343,6 +343,12 @@ class ArtifactStore:
             runtime_label = effective_labels.setdefault("runtime", "ollama")
             if runtime_label != "ollama":
                 raise ValueError("Ollama jobs require the runtime=ollama label")
+        if agent_version.startswith("openai/"):
+            runtime_label = effective_labels.setdefault("runtime", "openai-compatible")
+            if runtime_label != "openai-compatible":
+                raise ValueError(
+                    "OpenAI-compatible jobs require the runtime=openai-compatible label"
+                )
         job = EvaluationJob(
             suite_path=suite_path,
             agent_version=agent_version,

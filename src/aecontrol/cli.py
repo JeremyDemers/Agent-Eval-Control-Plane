@@ -23,6 +23,7 @@ from aecontrol.hardware import detect_worker_capabilities
 from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, EvaluationRun, GateOutcome, JobStatus, RunComparison
 from aecontrol.ollama import OllamaClient, OllamaError
+from aecontrol.openai_compatible import OpenAICompatibleClient, OpenAICompatibleError
 from aecontrol.reports import render_html
 from aecontrol.store import ArtifactStore
 
@@ -34,6 +35,7 @@ agents_app = typer.Typer(help="Agent commands")
 store_app = typer.Typer(help="PostgreSQL artifact store commands")
 jobs_app = typer.Typer(help="Durable evaluation job commands")
 ollama_app = typer.Typer(help="Ollama provider commands")
+openai_app = typer.Typer(help="OpenAI-compatible provider commands")
 app.add_typer(datasets_app, name="datasets")
 app.add_typer(suites_app, name="suites")
 app.add_typer(plugins_app, name="plugins")
@@ -41,6 +43,7 @@ app.add_typer(agents_app, name="agents")
 app.add_typer(store_app, name="store")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(ollama_app, name="ollama")
+app.add_typer(openai_app, name="openai")
 console = Console()
 
 
@@ -152,7 +155,7 @@ def report(
 @plugins_app.command("list")
 def plugins_list() -> None:
     payload = {
-        "runtimes": ["deterministic_coding", "ollama_coding"],
+        "runtimes": ["deterministic_coding", "ollama_coding", "openai_compatible_coding"],
         "evaluators": [
             "public_test_success",
             "hidden_test_success",
@@ -335,6 +338,30 @@ def ollama_models(json_output: bool = typer.Option(False, "--json")) -> None:
         return
     for model in models:
         console.print(f"{model.name} {model.size / (1024**3):.1f} GiB {model.digest[:12]}")
+
+
+@openai_app.command("doctor")
+def openai_doctor() -> None:
+    try:
+        models = asyncio.run(OpenAICompatibleClient().models())
+    except OpenAICompatibleError as error:
+        console.print(f"[red]unavailable[/red] {error}")
+        raise typer.Exit(1) from error
+    console.print(f"[green]healthy[/green] OpenAI-compatible endpoint, models={len(models)}")
+
+
+@openai_app.command("models")
+def openai_models(json_output: bool = typer.Option(False, "--json")) -> None:
+    try:
+        models = asyncio.run(OpenAICompatibleClient().models())
+    except OpenAICompatibleError as error:
+        console.print(f"[red]unavailable[/red] {error}")
+        raise typer.Exit(1) from error
+    if json_output:
+        console.print(json.dumps([model.model_dump() for model in models], indent=2))
+        return
+    for model in models:
+        console.print(model.id)
 
 
 @app.command()

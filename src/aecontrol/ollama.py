@@ -51,7 +51,7 @@ class OllamaClient:
         return [OllamaModel.model_validate(item) for item in payload.get("models", [])]
 
     async def repair(self, model: str, case: DatasetCase) -> OllamaRepair:
-        prompt = _repair_prompt(case)
+        prompt = repair_prompt(case)
         body = {
             "model": model,
             "prompt": prompt,
@@ -110,7 +110,7 @@ def parse_ollama_agent_version(agent_version: str) -> str | None:
     return model
 
 
-def _repair_prompt(case: DatasetCase) -> str:
+def repair_prompt(case: DatasetCase) -> str:
     return (
         "You are repairing one small Python file. Return JSON matching the supplied schema with "
         "the complete replacement app.py source in the source field. Do not use markdown. "

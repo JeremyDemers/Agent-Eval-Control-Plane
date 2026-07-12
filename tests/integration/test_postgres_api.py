@@ -207,6 +207,10 @@ def test_capability_aware_job_placement(api_client: TestClient) -> None:
     assert claimed.job_id == cuda_job.job_id
     store.cancel_job(cuda_job.job_id)
 
+    compatible_job = store.enqueue_job("examples/suites/coding_repair.yaml", "openai/test-model")
+    assert compatible_job.required_labels == {"runtime": "openai-compatible"}
+    store.cancel_job(compatible_job.job_id)
+
 
 def test_readiness_detects_queued_work_without_workers(api_client: TestClient) -> None:
     queued = api_client.post(
