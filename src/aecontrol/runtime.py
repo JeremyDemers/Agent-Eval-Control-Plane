@@ -86,6 +86,7 @@ class DeterministicCodingRuntime:
                 )
             )
         result = self._sandbox.run(case, patched)
+        runtime_metadata["sandbox_backend"] = result.backend
         for call in result.tool_calls:
             trajectory.steps.append(
                 TrajectoryStep(

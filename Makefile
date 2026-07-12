@@ -1,4 +1,4 @@
-.PHONY: setup format lint typecheck test test-unit test-property test-contract test-integration test-e2e demo ollama-demo service-demo serve worker db-start db-stop db-status docker-build docker-demo podman-build podman-demo clean
+.PHONY: setup format lint typecheck test test-unit test-property test-contract test-integration test-e2e demo sandbox-demo ollama-demo service-demo serve worker db-start db-stop db-status docker-build docker-demo podman-build podman-demo clean
 
 PODMAN_ENV = case "$${XDG_DATA_HOME:-}" in "$$HOME"/snap/code/*/.local/share) unset XDG_DATA_HOME ;; esac;
 CONTAINER_ENGINE ?= podman
@@ -37,6 +37,9 @@ test-e2e:
 
 demo:
 	./scripts/demo.sh
+
+sandbox-demo:
+	./scripts/sandbox-demo.sh
 
 ollama-demo: db-start
 	DATABASE_URL=$(DATABASE_URL) ./scripts/ollama-demo.sh

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import socket
 import sys
 from pathlib import Path
@@ -48,6 +49,10 @@ def doctor() -> None:
     console.print("[green]aecontrol doctor ok[/green]")
     console.print(f"python: {sys.version.split()[0]}")
     console.print("runtime: deterministic_coding")
+    backend = os.getenv("AECONTROL_SANDBOX_BACKEND", "process")
+    console.print(f"sandbox: {backend}")
+    if backend == "podman":
+        console.print(f"podman: {shutil.which('podman') or 'not found'}")
 
 
 @datasets_app.command("validate")

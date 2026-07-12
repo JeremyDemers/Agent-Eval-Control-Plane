@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import ast
 import difflib
+import os
+import resource
+import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Protocol
+from uuid import uuid4
 
 from aecontrol.models import DatasetCase, ToolCall, ToolResult
 
@@ -20,6 +26,124 @@ class SandboxResult:
     hidden_passed: bool
     tool_calls: list[ToolCall]
     tool_results: list[ToolResult]
+    backend: str
+
+
+@dataclass(frozen=True)
+class SandboxPolicy:
+    timeout_seconds: float = 5
+    max_source_bytes: int = 64 * 1024
+    max_output_bytes: int = 8 * 1024
+    cpu_seconds: int = 2
+    memory_bytes: int = 256 * 1024 * 1024
+    max_file_bytes: int = 4 * 1024 * 1024
+    max_open_files: int = 64
+    max_processes: int = 32
+    denied_imports: frozenset[str] = field(
+        default_factory=lambda: frozenset(
+            {"ctypes", "multiprocessing", "os", "resource", "shutil", "socket", "subprocess"}
+        )
+    )
+    denied_calls: frozenset[str] = field(
+        default_factory=lambda: frozenset({"__import__", "compile", "eval", "exec", "open"})
+    )
+
+
+class TestExecutor(Protocol):
+    name: str
+
+    def run_test(self, root: Path, test_path: Path, policy: SandboxPolicy) -> tuple[bool, str]: ...
+
+
+class ProcessTestExecutor:
+    name = "process"
+
+    def run_test(self, root: Path, test_path: Path, policy: SandboxPolicy) -> tuple[bool, str]:
+        def apply_limits() -> None:
+            resource.setrlimit(resource.RLIMIT_CPU, (policy.cpu_seconds, policy.cpu_seconds))
+            resource.setrlimit(resource.RLIMIT_AS, (policy.memory_bytes, policy.memory_bytes))
+            resource.setrlimit(
+                resource.RLIMIT_FSIZE, (policy.max_file_bytes, policy.max_file_bytes)
+            )
+            resource.setrlimit(
+                resource.RLIMIT_NOFILE, (policy.max_open_files, policy.max_open_files)
+            )
+            resource.setrlimit(resource.RLIMIT_NPROC, (policy.max_processes, policy.max_processes))
+
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-B", str(test_path)],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=policy.timeout_seconds,
+                check=False,
+                env={"PYTHONPATH": str(root), "PYTHONDONTWRITEBYTECODE": "1"},
+                preexec_fn=apply_limits,
+                start_new_session=True,
+            )
+        except subprocess.TimeoutExpired:
+            return False, f"sandbox timeout after {policy.timeout_seconds}s"
+        output = (proc.stdout + proc.stderr).strip()
+        return proc.returncode == 0, _truncate(output or "ok", policy.max_output_bytes)
+
+
+class PodmanTestExecutor:
+    name = "podman"
+
+    def __init__(self, image: str = "python:3.12-slim") -> None:
+        executable = shutil.which("podman")
+        if executable is None:
+            raise RuntimeError("Podman sandbox requested but podman is not installed")
+        self.executable = executable
+        self.image = image
+
+    def run_test(self, root: Path, test_path: Path, policy: SandboxPolicy) -> tuple[bool, str]:
+        container_name = f"aecontrol-{uuid4().hex}"
+        command = [
+            self.executable,
+            "run",
+            "--rm",
+            "--pull=never",
+            "--name",
+            container_name,
+            "--network=none",
+            f"--memory={policy.memory_bytes}",
+            "--cpus=0.5",
+            f"--pids-limit={policy.max_processes}",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--user=65534:65534",
+            "--volume",
+            f"{root}:/workspace:ro,Z",
+            "--workdir=/workspace",
+            self.image,
+            "python",
+            "-B",
+            f"/workspace/{test_path.name}",
+        ]
+        try:
+            proc = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=policy.timeout_seconds + 10,
+                check=False,
+                env=_podman_environment(),
+            )
+        except subprocess.TimeoutExpired:
+            subprocess.run(
+                [self.executable, "rm", "--force", container_name],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+                env=_podman_environment(),
+            )
+            return False, f"container sandbox timeout after {policy.timeout_seconds}s"
+        output = (proc.stdout + proc.stderr).strip()
+        return proc.returncode == 0, _truncate(output or "ok", policy.max_output_bytes)
 
 
 def vulnerable_source(case: DatasetCase) -> str:
@@ -89,9 +213,30 @@ def hidden_test_source(case: DatasetCase) -> str:
 
 
 class CodingSandbox:
+    def __init__(
+        self,
+        executor: TestExecutor | None = None,
+        policy: SandboxPolicy | None = None,
+    ) -> None:
+        self.policy = policy or SandboxPolicy()
+        self.executor = executor or _executor_from_environment()
+
     def run(self, case: DatasetCase, patched_source: str) -> SandboxResult:
         tool_calls: list[ToolCall] = []
         tool_results: list[ToolResult] = []
+        rejection = validate_source(patched_source, self.policy)
+        if rejection is not None:
+            return SandboxResult(
+                patch="",
+                modified_files=[],
+                public_test_output=rejection,
+                hidden_test_output="not run: source rejected",
+                public_passed=False,
+                hidden_passed=False,
+                tool_calls=tool_calls,
+                tool_results=tool_results,
+                backend=self.executor.name,
+            )
         with TemporaryDirectory(prefix="aecontrol-") as temp_dir:
             root = Path(temp_dir)
             app_path = root / "app.py"
@@ -141,22 +286,16 @@ class CodingSandbox:
             hidden_passed=hidden_passed,
             tool_calls=tool_calls,
             tool_results=tool_results,
+            backend=self.executor.name,
         )
 
     def _run_test(self, root: Path, source: str) -> tuple[bool, str]:
         test_path = root / "_aecontrol_test.py"
         test_path.write_text(source)
-        proc = subprocess.run(
-            [sys.executable, str(test_path)],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-            env={"PYTHONPATH": str(root)},
-        )
-        output = (proc.stdout + proc.stderr).strip()
-        return proc.returncode == 0, output or "ok"
+        root.chmod(0o755)
+        test_path.chmod(0o644)
+        (root / "app.py").chmod(0o644)
+        return self.executor.run_test(root, test_path, self.policy)
 
     def _record(
         self,
@@ -170,3 +309,55 @@ class CodingSandbox:
         call = ToolCall(name=name, arguments=arguments)
         calls.append(call)
         results.append(ToolResult(call_id=call.call_id, name=name, ok=ok, output=output[:2000]))
+
+
+def validate_source(source: str, policy: SandboxPolicy) -> str | None:
+    if len(source.encode()) > policy.max_source_bytes:
+        return f"source rejected: exceeds {policy.max_source_bytes} byte limit"
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as error:
+        return f"source rejected: syntax error: {error.msg}"
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [item.name.split(".")[0] for item in node.names]
+            if isinstance(node, ast.ImportFrom) and node.module:
+                names.append(node.module.split(".")[0])
+            denied = sorted(set(names) & policy.denied_imports)
+            if denied:
+                return f"source rejected: denied import {denied[0]}"
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in policy.denied_calls
+        ):
+            return f"source rejected: denied call {node.func.id}"
+    return None
+
+
+def _executor_from_environment() -> TestExecutor:
+    backend = os.getenv("AECONTROL_SANDBOX_BACKEND", "process")
+    if backend == "process":
+        return ProcessTestExecutor()
+    if backend == "podman":
+        return PodmanTestExecutor(os.getenv("AECONTROL_SANDBOX_IMAGE", "python:3.12-slim"))
+    raise ValueError(f"unknown sandbox backend: {backend}")
+
+
+def _podman_environment() -> dict[str, str]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key in {"HOME", "PATH", "TMPDIR", "XDG_RUNTIME_DIR"}
+    }
+    xdg_data_home = os.environ.get("XDG_DATA_HOME", "")
+    if "/snap/code/" not in xdg_data_home:
+        environment["XDG_DATA_HOME"] = xdg_data_home
+    return environment
+
+
+def _truncate(value: str, maximum_bytes: int) -> str:
+    encoded = value.encode()
+    if len(encoded) <= maximum_bytes:
+        return value
+    return encoded[:maximum_bytes].decode(errors="replace") + "\n[output truncated]"
