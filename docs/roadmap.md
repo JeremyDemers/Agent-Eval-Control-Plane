@@ -17,6 +17,7 @@ Implemented ahead of the original four-day scope:
 - Explainable queue placement diagnostics across API, CLI, dashboard, and SDK
 - Canonical SHA-256 integrity verification for persisted evaluation evidence
 - Reproducible Python distributions with clean-install CI and release attestations
+- CodeQL, dependency review, and frozen-lock vulnerability auditing
 
 Next stages:
 

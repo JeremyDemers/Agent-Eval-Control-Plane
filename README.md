@@ -1,6 +1,7 @@
 # AgentEval Control Plane
 
 [![CI](https://github.com/JeremyDemers/Agent-Eval-Control-Plane/actions/workflows/ci.yml/badge.svg)](https://github.com/JeremyDemers/Agent-Eval-Control-Plane/actions/workflows/ci.yml)
+[![Security](https://github.com/JeremyDemers/Agent-Eval-Control-Plane/actions/workflows/security.yml/badge.svg)](https://github.com/JeremyDemers/Agent-Eval-Control-Plane/actions/workflows/security.yml)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB)](https://www.python.org/)
 [![Typed](https://img.shields.io/badge/typing-py.typed-147A4B)](src/aecontrol/py.typed)
 [![License: MIT](https://img.shields.io/badge/license-MIT-171A1F)](LICENSE)
@@ -196,6 +197,14 @@ AECONTROL_SANDBOX_BACKEND=podman uv run aecontrol doctor
 
 Every run records `sandbox_backend` provenance. See [`docs/security.md`](docs/security.md) for the
 threat model and remaining boundary assumptions.
+
+CodeQL, pull-request dependency review, and a weekly `uv.lock`-derived vulnerability audit run in
+GitHub Actions. The local equivalent is:
+
+```bash
+uv export --frozen --no-dev --no-emit-project --format requirements-txt | \
+  uvx pip-audit -r /dev/stdin
+```
 
 ## Ollama Runtime
 
