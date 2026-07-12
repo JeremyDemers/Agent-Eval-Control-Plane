@@ -320,8 +320,17 @@ def hardware(json_output: bool = typer.Option(False, "--json")) -> None:
     console.print(f"host: {capabilities.hostname} ({capabilities.architecture})")
     console.print("accelerators: " + ", ".join(item.value for item in capabilities.accelerators))
     for gpu in capabilities.gpus:
+        telemetry = (
+            f", utilization {gpu.utilization_percent:.0f}%, "
+            f"memory {gpu.memory_used_mb}/{gpu.memory_total_mb} MiB, "
+            f"temperature {gpu.temperature_celsius:.0f} C"
+            if gpu.utilization_percent is not None
+            and gpu.memory_used_mb is not None
+            and gpu.temperature_celsius is not None
+            else ""
+        )
         console.print(
-            f"gpu: {gpu.name}, {gpu.memory_total_mb} MiB, compute capability {gpu.compute_capability}"
+            f"gpu {gpu.index}: {gpu.name}, compute capability {gpu.compute_capability}{telemetry}"
         )
 
 

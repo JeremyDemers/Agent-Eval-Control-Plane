@@ -33,7 +33,7 @@ def detect_nvidia_gpus() -> list[GpuDevice]:
         result = subprocess.run(
             [
                 executable,
-                "--query-gpu=name,memory.total,compute_cap",
+                "--query-gpu=index,uuid,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,compute_cap",
                 "--format=csv,noheader,nounits",
             ],
             capture_output=True,
@@ -49,16 +49,29 @@ def detect_nvidia_gpus() -> list[GpuDevice]:
     devices: list[GpuDevice] = []
     for line in result.stdout.splitlines():
         fields = [field.strip() for field in line.split(",")]
-        if len(fields) != 3:
+        if len(fields) != 9:
             continue
         try:
             devices.append(
                 GpuDevice(
-                    name=fields[0],
-                    memory_total_mb=int(fields[1]),
-                    compute_capability=fields[2],
+                    index=int(fields[0]),
+                    uuid=fields[1],
+                    name=fields[2],
+                    memory_total_mb=int(fields[3]),
+                    memory_used_mb=int(fields[4]),
+                    utilization_percent=float(fields[5]),
+                    temperature_celsius=float(fields[6]),
+                    power_draw_watts=_optional_float(fields[7]),
+                    compute_capability=fields[8],
                 )
             )
         except ValueError:
             continue
     return devices
+
+
+def _optional_float(value: str) -> float | None:
+    try:
+        return float(value)
+    except ValueError:
+        return None

@@ -12,6 +12,7 @@ Implemented ahead of the original four-day scope:
 - Typed synchronous and asynchronous Python SDK
 - OpenAI-compatible model runtime with local compatibility verification
 - Scoped API-key authentication with constant-time digest verification
+- Heartbeat-refreshed NVIDIA GPU telemetry and Prometheus device gauges
 
 Next stages:
 
