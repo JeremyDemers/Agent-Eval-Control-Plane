@@ -16,6 +16,7 @@ Implemented ahead of the original four-day scope:
 - Atomic CUDA admission by per-device memory and compute capability
 - Explainable queue placement diagnostics across API, CLI, dashboard, and SDK
 - Canonical SHA-256 integrity verification for persisted evaluation evidence
+- Reproducible Python distributions with clean-install CI and release attestations
 
 Next stages:
 

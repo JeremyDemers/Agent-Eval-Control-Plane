@@ -11,5 +11,7 @@ __pycache__/
 .coverage
 htmlcov/
 reports/
+dist/
+build/
 *.egg-info/
 *.pyc

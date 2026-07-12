@@ -33,3 +33,11 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest
       - run: make demo
+
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
+      - run: make package

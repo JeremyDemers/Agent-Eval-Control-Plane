@@ -53,6 +53,7 @@
 - Atomic per-device CUDA admission using memory and compute-capability requirements.
 - Explainable queue placement diagnostics with per-worker blocker analysis.
 - Tamper-evident run and comparison payloads with full-store integrity audits.
+- Reproducible wheel/sdist packaging with clean-install and provenance-attested releases.
 
 ## Verification
 
@@ -62,6 +63,7 @@
 - `uv run pytest`: 69 passed, 85.67% total coverage with an enforced 85% floor, including PostgreSQL/API, schema migration, artifact integrity, authentication, GPU telemetry, admission and diagnostics, worker, Ollama, OpenAI-compatible runtime, sandbox, observability, and SDK tests.
 - `make demo`: passed; regressed candidate produced BLOCK, fixed candidate produced PASS.
 - `make docker-build && make docker-demo`: passed with native Podman.
+- `make package && uvx twine check dist/*`: wheel/sdist build, clean installation, typed API, CLI, and metadata checks passed.
 - `make sandbox-demo`: 4/4 cases passed through networkless, read-only rootless Podman containers.
 - `make sdk-demo`: live typed SDK evaluation passed 4/4 hidden tests against a temporary service.
 - `make ollama-demo`: completed against local `llama3.2:3b`; 1/4 hidden tests passed and the release gate correctly returned BLOCK.
