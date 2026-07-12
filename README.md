@@ -104,6 +104,7 @@ Use `make serve PORT=8001` when port `8000` is already occupied.
 ![PostgreSQL-backed control plane showing persisted runs and release decisions](docs/assets/control-plane-dashboard.png)
 
 Set `DATABASE_URL` to use an existing PostgreSQL deployment. The default is shown in `.env.example`.
+API suite and policy files are restricted to `AECONTROL_INPUT_ROOT`, which defaults to `examples/`.
 
 Operational endpoints provide database health, queue-aware readiness, Prometheus-compatible metrics,
 and correlated request timing:
@@ -276,3 +277,9 @@ Schema v3 backfills existing PostgreSQL artifacts in place. See
 The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
 hardened isolation for untrusted code. Kubernetes execution, hosted LLM runtimes, object storage,
 NeMo/LangGraph adapters, and production observability remain in `docs/roadmap.md`.
+
+## Project Governance
+
+Contributions are welcome through focused issues and pull requests. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md), and
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for validation, disclosure, and participation guidance.

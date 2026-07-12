@@ -72,8 +72,15 @@ def create_app(
     database_url: str | None = None,
     schema: str = "public",
     auth_config: str | Path | None = None,
+    input_root: str | Path | None = None,
 ) -> FastAPI:
     resolved_database_url = database_url or os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
+    resolved_input_root = Path(
+        input_root or os.getenv("AECONTROL_INPUT_ROOT") or Path.cwd() / "examples"
+    ).resolve()
+    if not resolved_input_root.is_dir():
+        raise ValueError(f"input root is not a directory: {resolved_input_root}")
+    allowed_input_files = _index_input_files(resolved_input_root)
     store = ArtifactStore(resolved_database_url, schema=schema)
     authenticator = Authenticator(auth_config)
     require_read = authenticator.require("read")
@@ -194,7 +201,7 @@ def create_app(
     def enqueue_job(
         request: EvaluationJobRequest, _principal: Principal = Depends(require_write)
     ) -> EvaluationJob:
-        suite_path = _existing_file(request.suite_path, "suite")
+        suite_path = _existing_file(request.suite_path, "suite", allowed_input_files)
         try:
             return store.enqueue_job(
                 str(suite_path),
@@ -251,7 +258,7 @@ def create_app(
     async def evaluate(
         request: EvaluationRequest, _principal: Principal = Depends(require_write)
     ) -> EvaluationRun:
-        suite_path = _existing_file(request.suite_path, "suite")
+        suite_path = _existing_file(request.suite_path, "suite", allowed_input_files)
         try:
             run = await EvaluationEngine().run(load_suite(suite_path), request.agent_version)
         except (KeyError, ValueError) as error:
@@ -298,7 +305,7 @@ def create_app(
     ) -> StoredComparison:
         baseline = _get_run(store, request.baseline_run_id)
         candidate = _get_run(store, request.candidate_run_id)
-        policy_path = _existing_file(request.policy_path, "policy")
+        policy_path = _existing_file(request.policy_path, "policy", allowed_input_files)
         comparison = compare_runs(baseline, candidate)
         decision = evaluate_gate(comparison, load_policy(policy_path))
         return store.save_comparison(comparison, decision)
@@ -343,10 +350,26 @@ def create_app(
     return application
 
 
-def _existing_file(value: str, label: str) -> Path:
-    path = Path(value)
-    if not path.is_file():
-        raise HTTPException(status_code=422, detail=f"{label} file was not found: {value}")
+def _index_input_files(input_root: Path) -> dict[str, Path]:
+    files: dict[str, Path] = {}
+    working_directory = Path.cwd().resolve()
+    for candidate in input_root.rglob("*"):
+        resolved = candidate.resolve()
+        if not resolved.is_file() or not resolved.is_relative_to(input_root):
+            continue
+        files[resolved.relative_to(input_root).as_posix()] = resolved
+        if resolved.is_relative_to(working_directory):
+            files[resolved.relative_to(working_directory).as_posix()] = resolved
+    return files
+
+
+def _existing_file(value: str, label: str, allowed_files: dict[str, Path]) -> Path:
+    path = allowed_files.get(value)
+    if path is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{label} file is not available under the allowed input root: {value}",
+        )
     return path
 
 

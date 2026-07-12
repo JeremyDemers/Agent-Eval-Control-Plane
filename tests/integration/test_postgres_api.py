@@ -227,7 +227,16 @@ def test_api_returns_actionable_not_found_responses(api_client: TestClient) -> N
         json={"suite_path": "missing.yaml", "agent_version": "baseline"},
     )
     assert bad_suite.status_code == 422
-    assert "suite file was not found" in bad_suite.json()["detail"]
+    assert "suite file is not available under the allowed input root" in bad_suite.json()["detail"]
+
+    outside_root = api_client.post(
+        "/api/v1/evaluations",
+        json={"suite_path": "/etc/passwd", "agent_version": "baseline"},
+    )
+    assert outside_root.status_code == 422
+    assert outside_root.json() == {
+        "detail": "suite file is not available under the allowed input root: /etc/passwd"
+    }
 
     generated_id = api_client.get("/healthz", headers={"X-Request-ID": "invalid id!"})
     assert generated_id.headers["x-request-id"] != "invalid id!"
