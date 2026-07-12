@@ -134,6 +134,21 @@ The local Makefile uses native Podman by default because Snap-installed VS Code 
 emulation through a revision-specific `XDG_DATA_HOME`. Set `CONTAINER_ENGINE=docker` if you want to
 force Docker on a host with a healthy Docker daemon.
 
+## Execution Isolation
+
+The default process sandbox enforces source-size, syntax, import/call, wall-clock, CPU, address-space,
+file-size, descriptor, process-count, output, and environment limits. A rootless Podman backend adds a
+read-only workspace, disabled networking, dropped Linux capabilities, `no-new-privileges`, an
+unprivileged UID, and container CPU/memory/PID limits.
+
+```bash
+make sandbox-demo
+AECONTROL_SANDBOX_BACKEND=podman uv run aecontrol doctor
+```
+
+Every run records `sandbox_backend` provenance. See [`docs/security.md`](docs/security.md) for the
+threat model and remaining boundary assumptions.
+
 ## Ollama Runtime
 
 Ollama is an optional model-backed runtime; deterministic agents remain the required CI path. The
