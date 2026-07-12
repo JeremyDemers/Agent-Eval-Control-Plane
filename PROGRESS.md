@@ -46,16 +46,18 @@
 - Optional Ollama coding runtime with structured output, deterministic settings, and error isolation.
 - Prometheus metrics, queue-aware readiness, request correlation, and server timing.
 - Policy-driven process isolation and a rootless, networkless Podman sandbox backend.
+- Typed synchronous/asynchronous SDK with transport injection and terminal job waiting.
 
 ## Verification
 
 - `uv sync --extra dev`: passed.
 - `uv run ruff format . && uv run ruff check .`: passed.
 - `uv run mypy`: passed with strict settings.
-- `uv run pytest`: 38 passed, 85% total coverage with an enforced floor, including PostgreSQL/API, concurrent worker, capability-placement, Ollama, observability, and adversarial sandbox tests.
+- `uv run pytest`: 47 passed, 85% total coverage with an enforced floor, including PostgreSQL/API, worker, Ollama, sandbox, observability, and SDK tests.
 - `make demo`: passed; regressed candidate produced BLOCK, fixed candidate produced PASS.
 - `make docker-build && make docker-demo`: passed with native Podman.
 - `make sandbox-demo`: 4/4 cases passed through networkless, read-only rootless Podman containers.
+- `make sdk-demo`: live typed SDK evaluation passed 4/4 hidden tests against a temporary service.
 - `make ollama-demo`: completed against local `llama3.2:3b`; 1/4 hidden tests passed and the release gate correctly returned BLOCK.
 - `docs/assets/regressed-report.png`: regenerated from `reports/regressed.html` with headless Chrome.
 
