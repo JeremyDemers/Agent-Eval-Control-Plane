@@ -11,6 +11,7 @@ Implemented ahead of the original four-day scope:
 - Resource-limited process sandbox and rootless networkless Podman execution backend
 - Typed synchronous and asynchronous Python SDK
 - OpenAI-compatible model runtime with local compatibility verification
+- Scoped API-key authentication with constant-time digest verification
 
 Next stages:
 
@@ -18,4 +19,4 @@ Next stages:
 - Kubernetes sharded jobs
 - Hosted provider authentication and endpoint-specific adapters
 - NeMo and LangGraph interoperability packages
-- Authentication, multi-tenancy, object storage, metrics, and observability
+- Multi-tenancy, object storage, distributed metrics, and tracing

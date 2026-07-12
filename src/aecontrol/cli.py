@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 import json
 import os
 import shutil
@@ -15,6 +16,7 @@ from rich.console import Console
 
 from aecontrol.agents import list_agent_versions
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
+from aecontrol.auth import hash_api_key, load_auth_config
 from aecontrol.compare import compare_runs
 from aecontrol.datasets import validate_jsonl_dataset
 from aecontrol.engine import EvaluationEngine, load_suite
@@ -36,6 +38,7 @@ store_app = typer.Typer(help="PostgreSQL artifact store commands")
 jobs_app = typer.Typer(help="Durable evaluation job commands")
 ollama_app = typer.Typer(help="Ollama provider commands")
 openai_app = typer.Typer(help="OpenAI-compatible provider commands")
+auth_app = typer.Typer(help="API authentication commands")
 app.add_typer(datasets_app, name="datasets")
 app.add_typer(suites_app, name="suites")
 app.add_typer(plugins_app, name="plugins")
@@ -44,6 +47,7 @@ app.add_typer(store_app, name="store")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(ollama_app, name="ollama")
 app.add_typer(openai_app, name="openai")
+app.add_typer(auth_app, name="auth")
 console = Console()
 
 
@@ -56,6 +60,23 @@ def doctor() -> None:
     console.print(f"sandbox: {backend}")
     if backend == "podman":
         console.print(f"podman: {shutil.which('podman') or 'not found'}")
+
+
+@auth_app.command("hash-key")
+def auth_hash_key(secret: str | None = typer.Option(None, "--secret", hidden=True)) -> None:
+    """Hash a high-entropy API key for an authentication configuration."""
+    resolved = secret if secret is not None else getpass.getpass("API key: ")
+    try:
+        console.print(hash_api_key(resolved))
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+
+
+@auth_app.command("validate")
+def auth_validate(config: Path) -> None:
+    """Validate an authentication configuration without exposing key material."""
+    auth_config = load_auth_config(config)
+    console.print(f"[green]valid[/green] {config} keys={len(auth_config.keys)}")
 
 
 @datasets_app.command("validate")

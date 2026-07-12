@@ -48,13 +48,14 @@
 - Policy-driven process isolation and a rootless, networkless Podman sandbox backend.
 - Typed synchronous/asynchronous SDK with transport injection and terminal job waiting.
 - OpenAI-compatible runtime with structured chat completions and local protocol verification.
+- Optional scoped API-key authentication with OpenAPI integration and principal audit logging.
 
 ## Verification
 
 - `uv sync --extra dev`: passed.
 - `uv run ruff format . && uv run ruff check .`: passed.
 - `uv run mypy`: passed with strict settings.
-- `uv run pytest`: 55 passed, 85.52% total coverage with an enforced 85% floor, including PostgreSQL/API, worker, Ollama, OpenAI-compatible runtime, sandbox, observability, and SDK tests.
+- `uv run pytest`: 60 passed, 86.19% total coverage with an enforced 85% floor, including PostgreSQL/API, authentication, worker, Ollama, OpenAI-compatible runtime, sandbox, observability, and SDK tests.
 - `make demo`: passed; regressed candidate produced BLOCK, fixed candidate produced PASS.
 - `make docker-build && make docker-demo`: passed with native Podman.
 - `make sandbox-demo`: 4/4 cases passed through networkless, read-only rootless Podman containers.
@@ -67,5 +68,5 @@
 
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
-- API access is local-trust; durable workers are implemented, but production process supervision is deferred.
-- Kubernetes, hardened worker isolation, external LLMs, authentication, LangGraph, and NeMo remain on the roadmap.
+- The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
+- Kubernetes, hardened worker isolation, external LLMs, multi-tenancy, LangGraph, and NeMo remain on the roadmap.

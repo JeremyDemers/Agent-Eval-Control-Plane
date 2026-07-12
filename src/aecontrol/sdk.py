@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from collections.abc import Callable
 from typing import Any, Protocol
@@ -42,6 +43,7 @@ class HttpTransport:
         base_url: str,
         timeout_seconds: float = 30,
         request_id_factory: Callable[[], str] | None = None,
+        api_key: str | None = None,
     ) -> None:
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -49,10 +51,13 @@ class HttpTransport:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.request_id_factory = request_id_factory
+        self.api_key = api_key or os.getenv("AECONTROL_API_KEY")
 
     def request(self, method: str, path: str, payload: JsonObject | None = None) -> Any:
         data = json.dumps(payload).encode() if payload is not None else None
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         if self.request_id_factory is not None:
             headers["X-Request-ID"] = self.request_id_factory()
         request = Request(  # noqa: S310
@@ -79,8 +84,9 @@ class AgentEvalClient:
         self,
         base_url: str = "http://127.0.0.1:8000",
         transport: Transport | None = None,
+        api_key: str | None = None,
     ) -> None:
-        self.transport = transport or HttpTransport(base_url)
+        self.transport = transport or HttpTransport(base_url, api_key=api_key)
 
     def health(self) -> JsonObject:
         return _object(self.transport.request("GET", "/healthz"))
@@ -183,8 +189,9 @@ class AsyncAgentEvalClient:
         self,
         base_url: str = "http://127.0.0.1:8000",
         transport: Transport | None = None,
+        api_key: str | None = None,
     ) -> None:
-        self._sync = AgentEvalClient(base_url, transport)
+        self._sync = AgentEvalClient(base_url, transport, api_key)
 
     async def health(self) -> JsonObject:
         return await asyncio.to_thread(self._sync.health)
