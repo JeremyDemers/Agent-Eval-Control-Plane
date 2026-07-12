@@ -203,8 +203,22 @@ make openai-demo
 See [`docs/openai-compatible.md`](docs/openai-compatible.md) for endpoint configuration and the limits
 of the checked compatibility claim.
 
+## Scoped API Authentication
+
+Production-style bearer authentication can be enabled without changing the zero-configuration local
+demo. API keys are stored as SHA-256 digests, compared in constant time, assigned `read`, `write`, or
+`admin` scopes, represented in OpenAPI, and attributed by key ID in structured request logs.
+
+```bash
+uv run aecontrol auth hash-key
+uv run aecontrol auth validate auth.yaml
+AECONTROL_AUTH_CONFIG=auth.yaml make serve
+```
+
+See [`docs/authentication.md`](docs/authentication.md) for configuration and rotation guidance.
+
 ## Current Limitations
 
-The service is intentionally local-trust for this portfolio phase. Temporary workspaces are not
-hardened isolation for untrusted code. Kubernetes execution, hosted LLM runtimes, authentication, object storage,
+The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
+hardened isolation for untrusted code. Kubernetes execution, hosted LLM runtimes, object storage,
 NeMo/LangGraph adapters, and production observability remain in `docs/roadmap.md`.

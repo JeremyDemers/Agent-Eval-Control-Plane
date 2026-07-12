@@ -6,7 +6,7 @@ engine, database, and API.
 ```python
 from aecontrol import AgentEvalClient
 
-client = AgentEvalClient("http://127.0.0.1:8000")
+client = AgentEvalClient("http://127.0.0.1:8000", api_key="your-high-entropy-key")
 job = client.enqueue_job(
     "examples/suites/coding_repair.yaml",
     "candidate_fixed",

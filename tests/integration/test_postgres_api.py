@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from psycopg import sql
 
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
+from aecontrol.auth import hash_api_key
 from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, JobStatus, WorkerCapabilities
 from aecontrol.store import ArtifactStore
@@ -28,6 +29,63 @@ def api_client(database_url: str) -> TestClient:
         yield client
     with psycopg.connect(database_url, autocommit=True) as connection:
         connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    schema = f"test_{uuid4().hex}"
+    auth_config = tmp_path / "auth.yaml"
+    auth_config.write_text(
+        "keys:\n"
+        f"  - key_id: observer\n    secret_sha256: {hash_api_key('read-secret')}\n"
+        "    scopes: [read]\n"
+        f"  - key_id: operator\n    secret_sha256: {hash_api_key('write-secret')}\n"
+        "    scopes: [read, write]\n"
+    )
+    try:
+        with TestClient(create_app(database_url, schema=schema, auth_config=auth_config)) as client:
+            assert client.get("/healthz").status_code == 200
+            assert client.get("/").status_code == 200
+
+            missing = client.get("/api/v1/runs")
+            assert missing.status_code == 401
+            assert missing.headers["www-authenticate"] == "Bearer"
+            assert missing.json() == {"detail": "API key is required"}
+
+            invalid = client.get("/api/v1/runs", headers={"Authorization": "Bearer wrong-secret"})
+            assert invalid.status_code == 401
+            assert invalid.json() == {"detail": "API key is invalid"}
+
+            observer_headers = {"Authorization": "Bearer read-secret"}
+            assert client.get("/api/v1/runs", headers=observer_headers).status_code == 200
+            forbidden = client.post(
+                "/api/v1/jobs",
+                headers=observer_headers,
+                json={
+                    "suite_path": "examples/suites/coding_repair.yaml",
+                    "agent_version": "baseline",
+                },
+            )
+            assert forbidden.status_code == 403
+            assert forbidden.json() == {"detail": "API key requires the write scope"}
+
+            operator_headers = {"Authorization": "Bearer write-secret"}
+            queued = client.post(
+                "/api/v1/jobs",
+                headers=operator_headers,
+                json={
+                    "suite_path": "examples/suites/coding_repair.yaml",
+                    "agent_version": "baseline",
+                },
+            )
+            assert queued.status_code == 202
+
+            security = client.get("/openapi.json").json()["components"]["securitySchemes"]
+            assert security["ControlPlaneAPIKey"]["scheme"] == "bearer"
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
 
 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:

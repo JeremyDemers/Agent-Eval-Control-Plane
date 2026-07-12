@@ -160,11 +160,22 @@ def test_http_transport_validates_url_and_decodes_response(monkeypatch: pytest.M
     response.__exit__ = Mock(return_value=None)
     opened = Mock(return_value=response)
     monkeypatch.setattr("aecontrol.sdk.urlopen", opened)
-    transport = HttpTransport("http://localhost:8000/", request_id_factory=lambda: "sdk-1")
+    transport = HttpTransport(
+        "http://localhost:8000/", request_id_factory=lambda: "sdk-1", api_key="secret"
+    )
 
     assert transport.request("GET", "/healthz") == {"status": "ok"}
     request = opened.call_args.args[0]
     assert request.headers["X-request-id"] == "sdk-1"
+    assert request.headers["Authorization"] == "Bearer secret"
+
+
+def test_http_transport_reads_api_key_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AECONTROL_API_KEY", "environment-secret")
+    transport = HttpTransport("http://localhost")
+    assert transport.api_key == "environment-secret"
 
 
 def test_http_transport_normalizes_server_and_connection_errors(

@@ -12,12 +12,13 @@ from importlib.metadata import version
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
+from aecontrol.auth import Authenticator, Principal
 from aecontrol.compare import compare_runs
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
@@ -61,9 +62,16 @@ class EvaluationJobRequest(BaseModel):
     required_labels: dict[str, str] = Field(default_factory=dict)
 
 
-def create_app(database_url: str | None = None, schema: str = "public") -> FastAPI:
+def create_app(
+    database_url: str | None = None,
+    schema: str = "public",
+    auth_config: str | Path | None = None,
+) -> FastAPI:
     resolved_database_url = database_url or os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
     store = ArtifactStore(resolved_database_url, schema=schema)
+    authenticator = Authenticator(auth_config)
+    require_read = authenticator.require("read")
+    require_write = authenticator.require("write")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -80,6 +88,7 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
         lifespan=lifespan,
     )
     application.state.store = store
+    application.state.authenticator = authenticator
 
     @application.middleware("http")
     async def request_context(request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -108,6 +117,9 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
                         "path": request.url.path,
                         "status": response_status,
                         "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                        "principal": getattr(
+                            getattr(request.state, "principal", None), "key_id", "anonymous"
+                        ),
                     },
                     separators=(",", ":"),
                 )
@@ -140,11 +152,13 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
         )
 
     @application.get("/api/v1/operations", response_model=OperationalSnapshot, tags=["operations"])
-    def operations() -> OperationalSnapshot:
+    def operations(_principal: Principal = Depends(require_read)) -> OperationalSnapshot:
         return store.operational_snapshot()
 
     @application.get("/api/v1/runs", response_model=list[StoredRunSummary], tags=["runs"])
-    def list_runs(limit: int = 100) -> list[StoredRunSummary]:
+    def list_runs(
+        limit: int = 100, _principal: Principal = Depends(require_read)
+    ) -> list[StoredRunSummary]:
         if not 1 <= limit <= 500:
             raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
         return store.list_runs(limit)
@@ -153,6 +167,7 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
     def list_jobs(
         limit: int = 100,
         job_status: JobStatus | None = Query(default=None, alias="status"),
+        _principal: Principal = Depends(require_read),
     ) -> list[EvaluationJob]:
         if not 1 <= limit <= 500:
             raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
@@ -164,7 +179,9 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
         status_code=status.HTTP_202_ACCEPTED,
         tags=["jobs"],
     )
-    def enqueue_job(request: EvaluationJobRequest) -> EvaluationJob:
+    def enqueue_job(
+        request: EvaluationJobRequest, _principal: Principal = Depends(require_write)
+    ) -> EvaluationJob:
         suite_path = _existing_file(request.suite_path, "suite")
         try:
             return store.enqueue_job(
@@ -179,14 +196,14 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @application.get("/api/v1/jobs/{job_id}", response_model=EvaluationJob, tags=["jobs"])
-    def get_job(job_id: UUID) -> EvaluationJob:
+    def get_job(job_id: UUID, _principal: Principal = Depends(require_read)) -> EvaluationJob:
         try:
             return store.get_job(job_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="job was not found") from error
 
     @application.delete("/api/v1/jobs/{job_id}", response_model=EvaluationJob, tags=["jobs"])
-    def cancel_job(job_id: UUID) -> EvaluationJob:
+    def cancel_job(job_id: UUID, _principal: Principal = Depends(require_write)) -> EvaluationJob:
         try:
             return store.cancel_job(job_id)
         except KeyError as error:
@@ -195,7 +212,7 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.get("/api/v1/workers", response_model=list[WorkerRecord], tags=["workers"])
-    def list_workers() -> list[WorkerRecord]:
+    def list_workers(_principal: Principal = Depends(require_read)) -> list[WorkerRecord]:
         return store.list_workers()
 
     @application.post(
@@ -204,7 +221,9 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
         status_code=status.HTTP_201_CREATED,
         tags=["runs"],
     )
-    async def evaluate(request: EvaluationRequest) -> EvaluationRun:
+    async def evaluate(
+        request: EvaluationRequest, _principal: Principal = Depends(require_write)
+    ) -> EvaluationRun:
         suite_path = _existing_file(request.suite_path, "suite")
         try:
             run = await EvaluationEngine().run(load_suite(suite_path), request.agent_version)
@@ -214,13 +233,15 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
         return run
 
     @application.get("/api/v1/runs/{run_id}", response_model=EvaluationRun, tags=["runs"])
-    def get_run(run_id: UUID) -> EvaluationRun:
+    def get_run(run_id: UUID, _principal: Principal = Depends(require_read)) -> EvaluationRun:
         return _get_run(store, run_id)
 
     @application.get(
         "/api/v1/runs/{run_id}/cases/{case_id}", response_model=CaseResult, tags=["runs"]
     )
-    def get_case(run_id: UUID, case_id: str) -> CaseResult:
+    def get_case(
+        run_id: UUID, case_id: str, _principal: Principal = Depends(require_read)
+    ) -> CaseResult:
         run = _get_run(store, run_id)
         result = next((item for item in run.case_results if item.case.case_id == case_id), None)
         if result is None:
@@ -232,7 +253,9 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
         response_model=list[StoredComparisonSummary],
         tags=["comparisons"],
     )
-    def list_comparisons(limit: int = 100) -> list[StoredComparisonSummary]:
+    def list_comparisons(
+        limit: int = 100, _principal: Principal = Depends(require_read)
+    ) -> list[StoredComparisonSummary]:
         if not 1 <= limit <= 500:
             raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
         return store.list_comparisons(limit)
@@ -243,7 +266,9 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
         status_code=status.HTTP_201_CREATED,
         tags=["comparisons"],
     )
-    def create_comparison(request: ComparisonRequest) -> StoredComparison:
+    def create_comparison(
+        request: ComparisonRequest, _principal: Principal = Depends(require_write)
+    ) -> StoredComparison:
         baseline = _get_run(store, request.baseline_run_id)
         candidate = _get_run(store, request.candidate_run_id)
         policy_path = _existing_file(request.policy_path, "policy")
@@ -256,7 +281,9 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
         response_model=StoredComparison,
         tags=["comparisons"],
     )
-    def get_comparison(comparison_id: UUID) -> StoredComparison:
+    def get_comparison(
+        comparison_id: UUID, _principal: Principal = Depends(require_read)
+    ) -> StoredComparison:
         try:
             return store.get_comparison(comparison_id)
         except KeyError as error:
