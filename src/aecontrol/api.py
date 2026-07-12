@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import json
+import logging
 import os
+import re
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from html import escape
 from importlib.metadata import version
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import FastAPI, HTTPException, Query, status
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
 
 from aecontrol.compare import compare_runs
 from aecontrol.engine import EvaluationEngine, load_suite
@@ -21,14 +27,18 @@ from aecontrol.models import (
     EvaluationJob,
     EvaluationRun,
     JobStatus,
+    OperationalSnapshot,
     StoredComparison,
     StoredComparisonSummary,
     StoredRunSummary,
     WorkerRecord,
 )
+from aecontrol.observability import render_prometheus
 from aecontrol.store import ArtifactStore
 
 DEFAULT_DATABASE_URL = "postgresql://aecontrol@127.0.0.1:55432/aecontrol"
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+request_logger = logging.getLogger("uvicorn.error.aecontrol.requests")
 
 
 class EvaluationRequest(BaseModel):
@@ -71,9 +81,67 @@ def create_app(database_url: str | None = None, schema: str = "public") -> FastA
     )
     application.state.store = store
 
+    @application.middleware("http")
+    async def request_context(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        supplied_request_id = request.headers.get("x-request-id", "")
+        request_id = (
+            supplied_request_id
+            if REQUEST_ID_PATTERN.fullmatch(supplied_request_id)
+            else str(uuid4())
+        )
+        started = time.perf_counter()
+        response_status = 500
+        try:
+            response = await call_next(request)
+            response_status = response.status_code
+            response.headers["X-Request-ID"] = request_id
+            duration_ms = (time.perf_counter() - started) * 1000
+            response.headers["Server-Timing"] = f"app;dur={duration_ms:.2f}"
+            return response
+        finally:
+            request_logger.info(
+                json.dumps(
+                    {
+                        "event": "http_request",
+                        "request_id": request_id,
+                        "method": request.method,
+                        "path": request.url.path,
+                        "status": response_status,
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    },
+                    separators=(",", ":"),
+                )
+            )
+
     @application.get("/healthz", tags=["operations"])
     def health() -> dict[str, object]:
         return store.health()
+
+    @application.get("/readyz", tags=["operations"])
+    def readiness() -> JSONResponse:
+        snapshot = store.operational_snapshot()
+        queued = snapshot.job_counts.get(JobStatus.QUEUED.value, 0)
+        ready = queued == 0 or snapshot.workers_active > 0
+        return JSONResponse(
+            status_code=200 if ready else 503,
+            content={
+                "status": "ready" if ready else "degraded",
+                "queued_jobs": queued,
+                "active_workers": snapshot.workers_active,
+                "expired_leases": snapshot.expired_leases,
+            },
+        )
+
+    @application.get("/metrics", include_in_schema=False)
+    def metrics() -> PlainTextResponse:
+        return PlainTextResponse(
+            render_prometheus(store.operational_snapshot()),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+
+    @application.get("/api/v1/operations", response_model=OperationalSnapshot, tags=["operations"])
+    def operations() -> OperationalSnapshot:
+        return store.operational_snapshot()
 
     @application.get("/api/v1/runs", response_model=list[StoredRunSummary], tags=["runs"])
     def list_runs(limit: int = 100) -> list[StoredRunSummary]:
@@ -259,7 +327,7 @@ border-radius:4px;padding:2px 6px;margin-right:4px;color:var(--muted)}}
 @media(max-width:720px){{header{{align-items:flex-start;padding:16px}}main{{padding:18px 12px}}
 table{{display:block;overflow-x:auto}}nav{{gap:10px}}}}
 </style></head><body><header><a href="/"><strong>AgentEval Control Plane</strong></a>
-<nav><a href="/docs">API</a><a href="/redoc">Schema</a></nav></header><main>{body}</main></body></html>"""
+<nav><a href="/docs">API</a><a href="/redoc">Schema</a><a href="/metrics">Metrics</a></nav></header><main>{body}</main></body></html>"""
 
 
 def _render_dashboard(

@@ -31,9 +31,15 @@ def api_client(database_url: str) -> TestClient:
 
 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
-    health = api_client.get("/healthz")
+    health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
     assert health.json()["schema_version"] == 1
+    assert health.headers["x-request-id"] == "integration-request"
+    assert health.headers["server-timing"].startswith("app;dur=")
+
+    readiness = api_client.get("/readyz")
+    assert readiness.status_code == 200
+    assert readiness.json()["status"] == "ready"
 
     baseline = api_client.post(
         "/api/v1/evaluations",
@@ -85,6 +91,11 @@ def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) 
     assert detail.status_code == 200
     assert "security_sensitive" in detail.text
 
+    metrics = api_client.get("/metrics")
+    assert metrics.status_code == 200
+    assert "aecontrol_runs_total 2" in metrics.text
+    assert 'aecontrol_gate_decisions{outcome="BLOCK"} 1' in metrics.text
+
 
 def test_api_returns_actionable_not_found_responses(api_client: TestClient) -> None:
     missing = api_client.get(f"/api/v1/runs/{uuid4()}")
@@ -97,6 +108,9 @@ def test_api_returns_actionable_not_found_responses(api_client: TestClient) -> N
     )
     assert bad_suite.status_code == 422
     assert "suite file was not found" in bad_suite.json()["detail"]
+
+    generated_id = api_client.get("/healthz", headers={"X-Request-ID": "invalid id!"})
+    assert generated_id.headers["x-request-id"] != "invalid id!"
 
 
 def test_durable_job_runs_to_completion(api_client: TestClient) -> None:
@@ -127,6 +141,10 @@ def test_durable_job_runs_to_completion(api_client: TestClient) -> None:
     assert workers.status_code == 200
     assert workers.json()[0]["worker_id"] == "test-worker"
     assert "Evaluation Queue" in api_client.get("/").text
+    operations = api_client.get("/api/v1/operations")
+    assert operations.status_code == 200
+    assert operations.json()["job_counts"] == {"completed": 1}
+    assert operations.json()["workers_active"] == 1
 
 
 def test_concurrent_workers_claim_job_once_and_failures_retry(api_client: TestClient) -> None:
@@ -188,3 +206,23 @@ def test_capability_aware_job_placement(api_client: TestClient) -> None:
     assert claimed is not None
     assert claimed.job_id == cuda_job.job_id
     store.cancel_job(cuda_job.job_id)
+
+
+def test_readiness_detects_queued_work_without_workers(api_client: TestClient) -> None:
+    queued = api_client.post(
+        "/api/v1/jobs",
+        json={
+            "suite_path": "examples/suites/coding_repair.yaml",
+            "agent_version": "baseline",
+        },
+    )
+    assert queued.status_code == 202
+
+    readiness = api_client.get("/readyz")
+    assert readiness.status_code == 503
+    assert readiness.json() == {
+        "status": "degraded",
+        "queued_jobs": 1,
+        "active_workers": 0,
+        "expired_leases": 0,
+    }

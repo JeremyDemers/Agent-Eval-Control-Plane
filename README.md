@@ -89,6 +89,17 @@ Use `make serve PORT=8001` when port `8000` is already occupied.
 
 Set `DATABASE_URL` to use an existing PostgreSQL deployment. The default is shown in `.env.example`.
 
+Operational endpoints provide database health, queue-aware readiness, Prometheus-compatible metrics,
+and correlated request timing:
+
+```bash
+curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/readyz
+curl http://127.0.0.1:8000/metrics
+```
+
+See [`docs/operations.md`](docs/operations.md) for metric semantics and request-ID behavior.
+
 ## Architecture
 
 ```mermaid

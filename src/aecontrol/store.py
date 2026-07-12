@@ -14,6 +14,7 @@ from aecontrol.models import (
     EvaluationJob,
     EvaluationRun,
     JobStatus,
+    OperationalSnapshot,
     QualityGateDecision,
     RunComparison,
     StoredComparison,
@@ -272,6 +273,61 @@ class ArtifactStore:
             "schema": self.schema,
             "schema_version": row["version"],
         }
+
+    def operational_snapshot(self) -> OperationalSnapshot:
+        self.initialize()
+        with self._connect() as connection:
+            runs_total = connection.execute(
+                "SELECT count(*) AS value FROM evaluation_runs"
+            ).fetchone()
+            comparisons_total = connection.execute(
+                "SELECT count(*) AS value FROM comparisons"
+            ).fetchone()
+            job_rows = connection.execute(
+                "SELECT status, count(*) AS value FROM evaluation_jobs GROUP BY status"
+            ).fetchall()
+            gate_rows = connection.execute(
+                "SELECT outcome, count(*) AS value FROM comparisons GROUP BY outcome"
+            ).fetchall()
+            worker_row = connection.execute(
+                """
+                SELECT count(*) AS registered,
+                       count(*) FILTER (WHERE last_seen_at >= now() - interval '2 minutes') AS active
+                FROM workers
+                """
+            ).fetchone()
+            queue_row = connection.execute(
+                """
+                SELECT count(*) FILTER (
+                           WHERE status = 'running' AND lease_expires_at < now()
+                       ) AS expired_leases,
+                       coalesce(extract(epoch FROM now() - min(created_at) FILTER (
+                           WHERE status = 'queued'
+                       )), 0) AS oldest_queued_seconds,
+                       coalesce(avg(extract(epoch FROM updated_at - created_at)) FILTER (
+                           WHERE status = 'completed'
+                       ), 0) AS average_completed_job_seconds
+                FROM evaluation_jobs
+                """
+            ).fetchone()
+        if (
+            runs_total is None
+            or comparisons_total is None
+            or worker_row is None
+            or queue_row is None
+        ):
+            raise RuntimeError("PostgreSQL did not return operational metrics")
+        return OperationalSnapshot(
+            runs_total=int(str(runs_total["value"])),
+            comparisons_total=int(str(comparisons_total["value"])),
+            job_counts={str(row["status"]): int(str(row["value"])) for row in job_rows},
+            gate_counts={str(row["outcome"]): int(str(row["value"])) for row in gate_rows},
+            workers_registered=int(str(worker_row["registered"])),
+            workers_active=int(str(worker_row["active"])),
+            expired_leases=int(str(queue_row["expired_leases"])),
+            oldest_queued_seconds=float(str(queue_row["oldest_queued_seconds"])),
+            average_completed_job_seconds=float(str(queue_row["average_completed_job_seconds"])),
+        )
 
     def enqueue_job(
         self,
