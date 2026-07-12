@@ -4,12 +4,22 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aecontrol"
-version = "0.14.0"
+version = "0.15.0"
 description = "AgentEval Control Plane: deterministic agent evaluation and release gates."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Jeremy Demers" }]
+keywords = ["agent-evaluation", "ai-agents", "release-gates", "nvidia", "llmops"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Framework :: FastAPI",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+]
 dependencies = [
   "fastapi>=0.115,<1",
   "psycopg[binary]>=3.2,<4",
@@ -34,6 +44,12 @@ dev = [
 
 [project.scripts]
 aecontrol = "aecontrol.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/JeremyDemers/Agent-Eval-Control-Plane"
+Documentation = "https://github.com/JeremyDemers/Agent-Eval-Control-Plane#readme"
+Issues = "https://github.com/JeremyDemers/Agent-Eval-Control-Plane/issues"
+Source = "https://github.com/JeremyDemers/Agent-Eval-Control-Plane"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aecontrol"]

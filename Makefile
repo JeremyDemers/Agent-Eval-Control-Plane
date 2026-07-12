@@ -1,4 +1,4 @@
-.PHONY: setup format lint typecheck test test-unit test-property test-contract test-integration test-e2e demo sdk-demo sandbox-demo ollama-demo openai-demo service-demo serve worker db-start db-stop db-status docker-build docker-demo podman-build podman-demo clean
+.PHONY: setup format lint typecheck test test-unit test-property test-contract test-integration test-e2e package demo sdk-demo sandbox-demo ollama-demo openai-demo service-demo serve worker db-start db-stop db-status docker-build docker-demo podman-build podman-demo clean
 
 PODMAN_ENV = case "$${XDG_DATA_HOME:-}" in "$$HOME"/snap/code/*/.local/share) unset XDG_DATA_HOME ;; esac;
 CONTAINER_ENGINE ?= podman
@@ -34,6 +34,9 @@ test-integration: db-start
 
 test-e2e:
 	uv run pytest tests/e2e
+
+package:
+	./scripts/package-smoke.sh
 
 demo:
 	./scripts/demo.sh
@@ -79,4 +82,4 @@ podman-build: docker-build
 podman-demo: docker-demo
 
 clean:
-	rm -rf .aecontrol reports htmlcov .coverage
+	rm -rf .aecontrol reports dist build htmlcov .coverage

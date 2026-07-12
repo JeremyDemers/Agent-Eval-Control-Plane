@@ -1,5 +1,10 @@
 # AgentEval Control Plane
 
+[![CI](https://github.com/JeremyDemers/Agent-Eval-Control-Plane/actions/workflows/ci.yml/badge.svg)](https://github.com/JeremyDemers/Agent-Eval-Control-Plane/actions/workflows/ci.yml)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB)](https://www.python.org/)
+[![Typed](https://img.shields.io/badge/typing-py.typed-147A4B)](src/aecontrol/py.typed)
+[![License: MIT](https://img.shields.io/badge/license-MIT-171A1F)](LICENSE)
+
 `aecontrol` is a control plane for evaluating deterministic tool-using coding agents. It compares
 agent versions, records normalized trajectories, detects aggregate and slice-level regressions,
 enforces YAML release gates, and persists evaluation evidence in PostgreSQL behind a FastAPI service.
@@ -159,6 +164,23 @@ make docker-demo
 The local Makefile uses native Podman by default because Snap-installed VS Code can break Docker
 emulation through a revision-specific `XDG_DATA_HOME`. Set `CONTAINER_ENGINE=docker` if you want to
 force Docker on a host with a healthy Docker daemon.
+
+## Release Artifacts
+
+`make package` builds a wheel and source distribution, installs the wheel into a fresh Python 3.12
+environment, verifies the typed public API, and runs the installed CLI. CI performs this smoke test
+after the PostgreSQL suite.
+
+Tags matching `v*` must match the package version. They create a GitHub Release containing both
+distributions and GitHub artifact-provenance attestations.
+
+```bash
+make package
+gh attestation verify dist/aecontrol-0.15.0-py3-none-any.whl \
+  --repo JeremyDemers/Agent-Eval-Control-Plane
+```
+
+See [`docs/releases.md`](docs/releases.md) for the release contract and verification procedure.
 
 ## Execution Isolation
 
