@@ -44,13 +44,14 @@
 - Horizontally scalable workers using PostgreSQL `FOR UPDATE SKIP LOCKED` claims.
 - Capability-aware placement with fail-safe NVIDIA GPU discovery and worker inventory.
 - Optional Ollama coding runtime with structured output, deterministic settings, and error isolation.
+- Prometheus metrics, queue-aware readiness, request correlation, and server timing.
 
 ## Verification
 
 - `uv sync --extra dev`: passed.
 - `uv run ruff format . && uv run ruff check .`: passed.
 - `uv run mypy`: passed with strict settings.
-- `uv run pytest`: 31 passed, 85% total coverage with an enforced floor, including PostgreSQL/API, concurrent worker, capability-placement, and Ollama adapter tests.
+- `uv run pytest`: 33 passed, 86% total coverage with an enforced floor, including PostgreSQL/API, concurrent worker, capability-placement, Ollama, and observability tests.
 - `make demo`: passed; regressed candidate produced BLOCK, fixed candidate produced PASS.
 - `make docker-build && make docker-demo`: passed with native Podman.
 - `make ollama-demo`: completed against local `llama3.2:3b`; 1/4 hidden tests passed and the release gate correctly returned BLOCK.

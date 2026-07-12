@@ -317,6 +317,18 @@ class WorkerRecord(BaseModel):
     last_seen_at: datetime
 
 
+class OperationalSnapshot(BaseModel):
+    runs_total: int = Field(ge=0)
+    comparisons_total: int = Field(ge=0)
+    job_counts: dict[str, int]
+    gate_counts: dict[str, int]
+    workers_registered: int = Field(ge=0)
+    workers_active: int = Field(ge=0)
+    expired_leases: int = Field(ge=0)
+    oldest_queued_seconds: float = Field(ge=0)
+    average_completed_job_seconds: float = Field(ge=0)
+
+
 class ValidationIssue(BaseModel):
     location: str
     message: str

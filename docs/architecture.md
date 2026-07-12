@@ -27,3 +27,7 @@ budget. This design supports horizontal worker scaling without introducing a sep
 Workers register normalized CPU, NVIDIA GPU, and operator-label capabilities. Accelerator and label
 requirements are evaluated inside the atomic claim query, keeping incompatible jobs out of a worker's
 lease and retry history.
+
+Operational health, readiness, and Prometheus metrics are derived from the same transactional tables
+as scheduling decisions. Request IDs and server timing connect API calls to structured logs without
+placing model prompts, patches, or high-cardinality artifact identifiers in metric labels.
