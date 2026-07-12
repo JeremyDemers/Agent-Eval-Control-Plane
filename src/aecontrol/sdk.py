@@ -15,6 +15,7 @@ from aecontrol.models import (
     Accelerator,
     EvaluationJob,
     EvaluationRun,
+    JobPlacementDiagnostic,
     JobStatus,
     OperationalSnapshot,
     StoredComparison,
@@ -123,6 +124,11 @@ class AgentEvalClient:
     def get_job(self, job_id: UUID) -> EvaluationJob:
         return EvaluationJob.model_validate(self.transport.request("GET", f"/api/v1/jobs/{job_id}"))
 
+    def explain_job(self, job_id: UUID) -> JobPlacementDiagnostic:
+        return JobPlacementDiagnostic.model_validate(
+            self.transport.request("GET", f"/api/v1/jobs/{job_id}/placement")
+        )
+
     def list_jobs(self, status: JobStatus | None = None) -> list[EvaluationJob]:
         query = f"?{urlencode({'status': status.value})}" if status else ""
         payload = self.transport.request("GET", f"/api/v1/jobs{query}")
@@ -226,6 +232,9 @@ class AsyncAgentEvalClient:
 
     async def get_job(self, job_id: UUID) -> EvaluationJob:
         return await asyncio.to_thread(self._sync.get_job, job_id)
+
+    async def explain_job(self, job_id: UUID) -> JobPlacementDiagnostic:
+        return await asyncio.to_thread(self._sync.explain_job, job_id)
 
     async def list_jobs(self, status: JobStatus | None = None) -> list[EvaluationJob]:
         return await asyncio.to_thread(self._sync.list_jobs, status)

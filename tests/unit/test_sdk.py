@@ -81,6 +81,29 @@ def test_client_health_and_job_listing() -> None:
     assert client.list_jobs(JobStatus.QUEUED)[0].status == JobStatus.QUEUED
 
 
+def test_client_explains_job_placement() -> None:
+    transport = FakeTransport()
+    job_id = uuid4()
+    transport.add(
+        "GET",
+        f"/api/v1/jobs/{job_id}/placement",
+        {
+            "job_id": str(job_id),
+            "job_status": "queued",
+            "observed_at": "2026-07-12T20:00:00Z",
+            "active_worker_window_seconds": 120,
+            "schedulable": False,
+            "active_workers": 0,
+            "matching_workers": 0,
+            "blockers": ["no workers are registered"],
+            "workers": [],
+        },
+    )
+    diagnostic = AgentEvalClient(transport=transport).explain_job(job_id)
+    assert diagnostic.schedulable is False
+    assert diagnostic.blockers == ["no workers are registered"]
+
+
 def test_client_collections_operations_and_cancellation() -> None:
     transport = FakeTransport()
     cancelled = job_payload(JobStatus.CANCELLED)

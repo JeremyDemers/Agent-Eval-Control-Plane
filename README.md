@@ -86,6 +86,12 @@ temperature, and power gauges. Incompatible workers skip jobs without consuming 
 
 CUDA jobs may require minimum framebuffer capacity and compute capability. PostgreSQL admits a lease
 only when one GPU satisfies the complete request, preventing accidental cross-device aggregation.
+Queued jobs expose placement diagnostics that identify stale workers, accelerator and label
+mismatches, and per-device GPU constraints without consuming an execution attempt.
+
+```bash
+uv run aecontrol jobs explain JOB_ID
+```
 
 Use `make serve PORT=8001` when port `8000` is already occupied.
 

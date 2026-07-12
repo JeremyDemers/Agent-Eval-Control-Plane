@@ -40,3 +40,18 @@ idempotency key based on `job_id`.
 Retries are bounded per job. Failure details are truncated before storage, successful retries clear
 old errors, and exhausted jobs remain queryable for diagnosis. The integration suite starts eight
 worker threads against one row and asserts that exactly one receives the lease.
+
+## Placement Diagnostics
+
+`GET /api/v1/jobs/{job_id}/placement` evaluates the job against registered workers without claiming
+it. The response distinguishes stale heartbeats, missing accelerators, exact-label mismatches, GPU
+memory limits, compute capability, and cross-device resource splits. It includes active and matching
+worker counts plus each worker's complete blocker list.
+
+```bash
+uv run aecontrol jobs explain JOB_ID
+uv run aecontrol jobs explain JOB_ID --json
+```
+
+Diagnostics are observational and may change with the next worker heartbeat. The authoritative lease
+decision remains the atomic PostgreSQL claim transaction.

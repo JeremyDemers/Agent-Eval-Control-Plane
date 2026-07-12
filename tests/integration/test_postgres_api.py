@@ -343,6 +343,13 @@ def test_gpu_resource_constraints_are_atomically_admitted(api_client: TestClient
     )
     assert store.lease_job("split-worker", capabilities=split_resources) is None
     assert store.get_job(constrained.job_id).attempts == 0
+    store.register_worker("split-worker", split_resources)
+    blocked = api_client.get(f"/api/v1/jobs/{constrained.job_id}/placement")
+    assert blocked.status_code == 200
+    assert blocked.json()["schedulable"] is False
+    assert blocked.json()["workers"][0]["reasons"] == [
+        "no single GPU satisfies all memory and compute requirements"
+    ]
 
     qualified = base.model_copy(
         update={
@@ -355,6 +362,11 @@ def test_gpu_resource_constraints_are_atomically_admitted(api_client: TestClient
             ]
         }
     )
+    store.register_worker("qualified-worker", qualified)
+    schedulable = api_client.get(f"/api/v1/jobs/{constrained.job_id}/placement")
+    assert schedulable.status_code == 200
+    assert schedulable.json()["schedulable"] is True
+    assert schedulable.json()["matching_workers"] == 1
     claimed = store.lease_job("qualified-worker", capabilities=qualified)
     assert claimed is not None
     assert claimed.job_id == constrained.job_id

@@ -302,6 +302,25 @@ def jobs_cancel(
     console.print(f"cancelled job {job.job_id}")
 
 
+@jobs_app.command("explain")
+def jobs_explain(
+    job_id: UUID,
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    diagnostic = ArtifactStore(database_url).placement_diagnostic(job_id)
+    if json_output:
+        console.print(diagnostic.model_dump_json(indent=2))
+        return
+    state = "schedulable" if diagnostic.schedulable else "blocked"
+    console.print(f"job {job_id}: {state}, matching_workers={diagnostic.matching_workers}")
+    for blocker in diagnostic.blockers:
+        console.print(f"- {blocker}")
+    for worker in diagnostic.workers:
+        result = "eligible" if worker.eligible else "; ".join(worker.reasons)
+        console.print(f"- {worker.worker_id}: {result}")
+
+
 @app.command()
 def worker(
     database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
