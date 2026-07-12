@@ -19,3 +19,15 @@ accept local suite and policy paths, so the service must not be exposed to untru
 phase. The repository-owned PostgreSQL cluster uses trust authentication only on its loopback listener;
 production deployment requires authenticated database connections, API authorization, request limits,
 and a dedicated hardened worker boundary.
+
+## Repository Security
+
+`.github/workflows/security.yml` runs three independent controls:
+
+- CodeQL static analysis on pull requests, `main`, and a weekly schedule.
+- Dependency review on pull requests, blocking newly introduced moderate-or-higher advisories.
+- `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
+
+Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
+development-only tools so its result describes the shipped runtime environment. As of the v0.15.0
+post-release audit, no known runtime dependency vulnerabilities were reported.
