@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
@@ -33,6 +33,7 @@ from aecontrol.guardrails import (
 )
 from aecontrol.integrity import ArtifactKeyring, ArtifactVerificationError
 from aecontrol.models import (
+    MIG_PROFILE_PATTERN,
     Accelerator,
     ArtifactIntegrityReport,
     CaseResult,
@@ -47,6 +48,7 @@ from aecontrol.models import (
     StoredComparisonSummary,
     StoredRunSummary,
     WorkerRecord,
+    normalize_mig_profile,
 )
 from aecontrol.observability import render_prometheus
 from aecontrol.store import ArtifactStore
@@ -79,6 +81,12 @@ class EvaluationJobRequest(BaseModel):
     minimum_cuda_compute_capability: float | None = Field(default=None, ge=1)
     minimum_gpu_memory_available_mb: int = Field(default=0, ge=0)
     maximum_gpu_utilization_percent: float | None = Field(default=None, ge=0, le=100)
+    required_mig_profile: str | None = Field(default=None, pattern=MIG_PROFILE_PATTERN)
+
+    @field_validator("required_mig_profile", mode="before")
+    @classmethod
+    def normalize_required_mig_profile(cls, value: str | None) -> str | None:
+        return normalize_mig_profile(value) if value is not None else None
 
 
 class GuardrailCheckRequest(BaseModel):
@@ -324,6 +332,7 @@ def create_app(
                 minimum_cuda_compute_capability=request.minimum_cuda_compute_capability,
                 minimum_gpu_memory_available_mb=request.minimum_gpu_memory_available_mb,
                 maximum_gpu_utilization_percent=request.maximum_gpu_utilization_percent,
+                required_mig_profile=request.required_mig_profile,
                 traceparent=http_request.state.traceparent,
                 request_id=http_request.state.request_id,
             )
@@ -646,6 +655,8 @@ def _render_dashboard(
 
 def _gpu_summary(gpu: GpuDevice) -> str:
     telemetry: list[str] = []
+    if gpu.mig_profile is not None:
+        telemetry.append(f"MIG {gpu.mig_profile}")
     if gpu.utilization_percent is not None:
         telemetry.append(f"{gpu.utilization_percent:.0f}% util")
     if gpu.memory_used_mb is not None:
@@ -670,6 +681,8 @@ def _job_requirement(job: EvaluationJob) -> str:
         requirements.append(f">={job.minimum_gpu_memory_available_mb} MiB free")
     if job.maximum_gpu_utilization_percent is not None:
         requirements.append(f"util <={job.maximum_gpu_utilization_percent:g}%")
+    if job.required_mig_profile is not None:
+        requirements.append(f"MIG {job.required_mig_profile}")
     return ", ".join(requirements)
 
 

@@ -54,6 +54,7 @@ def test_gpu_load_options_are_forwarded_and_rendered(monkeypatch) -> None:  # ty
         required_accelerator=Accelerator.CUDA,
         minimum_gpu_memory_available_mb=4096,
         maximum_gpu_utilization_percent=25,
+        required_mig_profile="3g.40gb",
     )
 
     class Store:
@@ -84,6 +85,8 @@ def test_gpu_load_options_are_forwarded_and_rendered(monkeypatch) -> None:  # ty
             "4096",
             "--maximum-gpu-utilization-percent",
             "25",
+            "--mig-profile",
+            "3g.40gb",
         ],
     )
     listed = runner.invoke(app, ["jobs", "list"])
@@ -91,7 +94,8 @@ def test_gpu_load_options_are_forwarded_and_rendered(monkeypatch) -> None:  # ty
     assert queued.exit_code == 0
     assert captured["minimum_gpu_memory_available_mb"] == 4096
     assert captured["maximum_gpu_utilization_percent"] == 25
-    assert "gpu_free>=4096MiB utilization<=25%" in listed.output
+    assert captured["required_mig_profile"] == "3g.40gb"
+    assert "gpu_free>=4096MiB utilization<=25% mig_profile=3g.40gb" in listed.output
     assert "gpu_memory" not in listed.output
 
 

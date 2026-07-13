@@ -43,7 +43,7 @@ from aecontrol.models import (
 )
 from aecontrol.placement import diagnose_placement
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class ArtifactStore:
@@ -224,6 +224,9 @@ class ArtifactStore:
                 "ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS request_id TEXT"
             )
             connection.execute(
+                "ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS required_mig_profile TEXT"
+            )
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS workers (
                     worker_id TEXT PRIMARY KEY,
@@ -243,7 +246,7 @@ class ArtifactStore:
                 connection.execute(
                     "INSERT INTO schema_metadata(version) VALUES (%s)", (SCHEMA_VERSION,)
                 )
-            elif int(row["version"]) in {1, 2, 3, 4, 5, 6}:
+            elif int(row["version"]) in {1, 2, 3, 4, 5, 6, 7}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif int(row["version"]) != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {row['version']}"
@@ -625,6 +628,7 @@ class ArtifactStore:
         minimum_cuda_compute_capability: float | None = None,
         minimum_gpu_memory_available_mb: int = 0,
         maximum_gpu_utilization_percent: float | None = None,
+        required_mig_profile: str | None = None,
         traceparent: str | None = None,
         request_id: str | None = None,
     ) -> EvaluationJob:
@@ -654,6 +658,7 @@ class ArtifactStore:
             minimum_cuda_compute_capability=minimum_cuda_compute_capability,
             minimum_gpu_memory_available_mb=minimum_gpu_memory_available_mb,
             maximum_gpu_utilization_percent=maximum_gpu_utilization_percent,
+            required_mig_profile=required_mig_profile,
             traceparent=traceparent,
             request_id=request_id,
         )
@@ -666,8 +671,8 @@ class ArtifactStore:
                     max_attempts, created_at, updated_at, required_accelerator, required_labels,
                     minimum_gpu_memory_mb, minimum_cuda_compute_capability,
                     minimum_gpu_memory_available_mb, maximum_gpu_utilization_percent,
-                    traceparent, request_id
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    required_mig_profile, traceparent, request_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -686,6 +691,7 @@ class ArtifactStore:
                     job.minimum_cuda_compute_capability,
                     job.minimum_gpu_memory_available_mb,
                     job.maximum_gpu_utilization_percent,
+                    job.required_mig_profile,
                     job.traceparent,
                     job.request_id,
                 ),
@@ -743,7 +749,7 @@ class ArtifactStore:
         self.initialize()
         accelerators = [Accelerator.CPU.value]
         labels: dict[str, str] = {}
-        gpu_profiles: list[dict[str, int | float | None]] = []
+        gpu_profiles: list[dict[str, int | float | str | None]] = []
         if capabilities is not None:
             accelerators = [item.value for item in capabilities.accelerators]
             labels = capabilities.labels
@@ -758,6 +764,7 @@ class ArtifactStore:
                         "memory_used_mb": gpu.memory_used_mb,
                         "compute_capability": compute_capability,
                         "utilization_percent": gpu.utilization_percent,
+                        "mig_profile": gpu.mig_profile,
                     }
                 )
         with self._connect() as connection:
@@ -775,6 +782,7 @@ class ArtifactStore:
                           AND minimum_cuda_compute_capability IS NULL
                           AND minimum_gpu_memory_available_mb = 0
                           AND maximum_gpu_utilization_percent IS NULL
+                          AND required_mig_profile IS NULL
                         )
                         OR EXISTS (
                           SELECT 1
@@ -783,7 +791,8 @@ class ArtifactStore:
                               memory_total_mb INTEGER,
                               memory_used_mb INTEGER,
                               compute_capability DOUBLE PRECISION,
-                              utilization_percent DOUBLE PRECISION
+                              utilization_percent DOUBLE PRECISION,
+                              mig_profile TEXT
                             )
                           WHERE gpu.memory_total_mb >= minimum_gpu_memory_mb
                             AND (
@@ -804,6 +813,10 @@ class ArtifactStore:
                                 gpu.utilization_percent IS NOT NULL
                                 AND gpu.utilization_percent <= maximum_gpu_utilization_percent
                               )
+                            )
+                            AND (
+                              required_mig_profile IS NULL
+                              OR gpu.mig_profile = required_mig_profile
                             )
                         )
                       )

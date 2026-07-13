@@ -4,6 +4,8 @@ import shutil
 import subprocess
 from unittest.mock import Mock
 
+import pytest
+
 from aecontrol.hardware import detect_nvidia_gpus, detect_worker_capabilities
 from aecontrol.models import Accelerator
 
@@ -37,6 +39,29 @@ def test_missing_nvidia_smi_falls_back_to_cpu(monkeypatch) -> None:  # type: ign
 
     assert capabilities.accelerators == [Accelerator.CPU]
     assert capabilities.labels == {"pool": "test"}
+
+
+def test_configured_mig_profile_is_applied_to_visible_devices(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    result = Mock(
+        returncode=0,
+        stdout="0, MIG-test, NVIDIA H100 80GB HBM3, 40960, 0, 0, 35, 50, 9.0\n",
+    )
+    monkeypatch.setenv("AECONTROL_MIG_PROFILE", " 1C.3G.40GB ")
+    monkeypatch.setattr(shutil, "which", Mock(return_value="/usr/bin/nvidia-smi"))
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=result))
+
+    capabilities = detect_worker_capabilities()
+
+    assert capabilities.gpus[0].mig_profile == "1c.3g.40gb"
+    assert Accelerator.CUDA in capabilities.accelerators
+
+
+def test_invalid_configured_mig_profile_fails_closed(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("AECONTROL_MIG_PROFILE", "forty-gigabytes")
+    monkeypatch.setattr(shutil, "which", Mock(return_value=None))
+
+    with pytest.raises(ValueError, match="invalid NVIDIA MIG profile"):
+        detect_worker_capabilities()
 
 
 def test_failed_or_malformed_gpu_queries_are_ignored(monkeypatch) -> None:  # type: ignore[no-untyped-def]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
@@ -8,6 +9,14 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 JsonValue = Any
+MIG_PROFILE_PATTERN = r"^(?:[1-9][0-9]*c\.)?[1-9][0-9]*g\.[1-9][0-9]*gb(?:\+me)?$"
+
+
+def normalize_mig_profile(value: str) -> str:
+    profile = value.strip().lower()
+    if re.fullmatch(MIG_PROFILE_PATTERN, profile) is None:
+        raise ValueError(f"invalid NVIDIA MIG profile: {value!r}")
+    return profile
 
 
 def utc_now() -> datetime:
@@ -314,10 +323,16 @@ class EvaluationJob(BaseModel):
     minimum_cuda_compute_capability: float | None = Field(default=None, ge=1)
     minimum_gpu_memory_available_mb: int = Field(default=0, ge=0)
     maximum_gpu_utilization_percent: float | None = Field(default=None, ge=0, le=100)
+    required_mig_profile: str | None = Field(default=None, pattern=MIG_PROFILE_PATTERN)
     traceparent: str | None = Field(
         default=None, pattern=r"^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
     )
     request_id: str | None = None
+
+    @field_validator("required_mig_profile", mode="before")
+    @classmethod
+    def normalize_required_mig_profile(cls, value: str | None) -> str | None:
+        return normalize_mig_profile(value) if value is not None else None
 
     @model_validator(mode="after")
     def gpu_constraints_require_cuda(self) -> EvaluationJob:
@@ -326,6 +341,7 @@ class EvaluationJob(BaseModel):
             or self.minimum_cuda_compute_capability is not None
             or self.minimum_gpu_memory_available_mb > 0
             or self.maximum_gpu_utilization_percent is not None
+            or self.required_mig_profile is not None
         ) and self.required_accelerator != Accelerator.CUDA:
             raise ValueError("GPU resource constraints require the cuda accelerator")
         return self
@@ -341,6 +357,12 @@ class GpuDevice(BaseModel):
     utilization_percent: float | None = Field(default=None, ge=0, le=100)
     temperature_celsius: float | None = None
     power_draw_watts: float | None = Field(default=None, ge=0)
+    mig_profile: str | None = Field(default=None, pattern=MIG_PROFILE_PATTERN)
+
+    @field_validator("mig_profile", mode="before")
+    @classmethod
+    def normalize_device_mig_profile(cls, value: str | None) -> str | None:
+        return normalize_mig_profile(value) if value is not None else None
 
 
 class WorkerCapabilities(BaseModel):

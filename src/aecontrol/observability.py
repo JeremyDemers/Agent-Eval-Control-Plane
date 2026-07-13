@@ -98,7 +98,9 @@ def render_prometheus(
     for worker_id, sampled_at, gpu in gpu_metrics:
         labels = (
             f'worker="{_escape_label(worker_id)}",gpu="{gpu.index}",'
-            f'uuid="{_escape_label(gpu.uuid)}",name="{_escape_label(gpu.name)}"'
+            f'uuid="{_escape_label(gpu.uuid)}",name="{_escape_label(gpu.name)}",'
+            f'partition="{"mig" if gpu.mig_profile else "full"}",'
+            f'mig_profile="{_escape_label(gpu.mig_profile or "")}"'
         )
         lines.append(
             f"aecontrol_gpu_telemetry_timestamp_seconds{{{labels}}} {sampled_at.timestamp():.6f}"

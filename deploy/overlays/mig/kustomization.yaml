@@ -3,7 +3,7 @@ kind: Kustomization
 namespace: aecontrol
 resources:
   - ../../kubernetes
-  - autoscaling.yaml
+  - workers.yaml
 images:
   - name: ghcr.io/jeremydemers/agent-eval-control-plane
     newTag: 0.26.0

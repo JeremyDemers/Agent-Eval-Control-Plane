@@ -83,6 +83,7 @@ def test_sync_client_serializes_and_waits_for_job() -> None:
         accelerator=Accelerator.CUDA,
         minimum_gpu_memory_available_mb=4096,
         maximum_gpu_utilization_percent=25,
+        required_mig_profile="3g.40gb",
     )
     completed = client.wait_for_job(created.job_id, poll_seconds=0)
 
@@ -98,6 +99,7 @@ def test_sync_client_serializes_and_waits_for_job() -> None:
         "minimum_cuda_compute_capability": None,
         "minimum_gpu_memory_available_mb": 4096,
         "maximum_gpu_utilization_percent": 25,
+        "required_mig_profile": "3g.40gb",
     }
 
 

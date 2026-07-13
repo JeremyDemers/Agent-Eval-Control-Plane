@@ -21,7 +21,7 @@ During rotation, retain old keys in `artifact-signing-keys`, change `artifact-si
 restart every workload before verifying the store. A production cluster should source these values
 from an external secret manager rather than committing key material.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.25.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.26.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
@@ -29,6 +29,30 @@ The included PostgreSQL instance is for portfolio and development clusters. Prod
 should use a managed PostgreSQL service, external secret management, network policies, TLS ingress,
 autoscaling, and a dedicated storage class. GPU nodes must have NVIDIA drivers and the NVIDIA device
 plugin installed; the manifests do not install cluster-level GPU operators.
+
+## NVIDIA MIG Workers
+
+The MIG overlay adds `1g.10gb` and `3g.40gb` worker deployments while retaining the base workloads.
+It expects NVIDIA GPU Operator to be installed with `mig.strategy=mixed` and the target node geometry
+to expose both profile resources. The overlay does not enable MIG mode or change node geometry.
+
+```bash
+kubectl apply -f /tmp/aecontrol-secret.yaml
+kubectl apply -k deploy/overlays/mig
+kubectl -n aecontrol get pods -l app.kubernetes.io/part-of=aecontrol
+kubectl describe node | grep 'nvidia.com/mig-'
+```
+
+Each worker requests exactly one profile-specific resource, selects nodes labeled
+`nvidia.com/mig.strategy=mixed`, and sets `AECONTROL_MIG_PROFILE` to the matching normalized profile.
+This joins Kubernetes isolation to AgentEval's PostgreSQL admission: a job requesting `3g.40gb`
+cannot be claimed by the full-GPU worker or the `1g.10gb` pool. Adjust `workers.yaml` when the cluster's
+MIG geometry differs.
+
+See NVIDIA's [GPU Operator MIG documentation](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-operator-mig.html)
+for operator installation, mixed-strategy resources, node labels, and geometry management. Use
+[DCGM Exporter](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html) for
+production per-instance telemetry.
 
 ## Queue-Aware Autoscaling
 

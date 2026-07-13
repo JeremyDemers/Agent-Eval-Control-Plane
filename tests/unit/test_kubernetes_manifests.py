@@ -100,3 +100,32 @@ def test_keda_overlay_scales_cpu_and_gpu_queues_independently() -> None:
         assert trigger["connectionFromEnv"] == "DATABASE_URL"
         assert "status = 'queued'" in trigger["query"]
         assert "lease_expires_at < now()" in trigger["query"]
+
+
+def test_mig_overlay_consumes_profile_resources_and_advertises_them() -> None:
+    resources = list(yaml.safe_load_all(Path("deploy/overlays/mig/workers.yaml").read_text()))
+    expected = {
+        "mig-1g-10gb-worker": "1g.10gb",
+        "mig-3g-40gb-worker": "3g.40gb",
+    }
+
+    for deployment in resources:
+        name = deployment["metadata"]["name"]
+        profile = expected[name]
+        pod_spec = deployment["spec"]["template"]["spec"]
+        assert pod_spec["nodeSelector"] == {"nvidia.com/mig.strategy": "mixed"}
+        assert pod_spec["securityContext"]["runAsNonRoot"] is True
+        container = pod_spec["containers"][0]
+        env = {item["name"]: item for item in container["env"]}
+        assert env["AECONTROL_MIG_PROFILE"]["value"] == profile
+        resource = f"nvidia.com/mig-{profile}"
+        assert container["resources"]["requests"][resource] == "1"
+        assert container["resources"]["limits"][resource] == "1"
+        assert "pool=kubernetes-mig" in container["command"]
+        assert "runtime=nvidia-nim" in container["command"]
+        assert container["securityContext"]["capabilities"]["drop"] == ["ALL"]
+
+    kustomization = yaml.safe_load(Path("deploy/overlays/mig/kustomization.yaml").read_text())
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    assert kustomization["resources"] == ["../../kubernetes", "workers.yaml"]
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]

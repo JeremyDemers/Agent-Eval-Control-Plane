@@ -295,6 +295,7 @@ def jobs_enqueue(
     maximum_gpu_utilization_percent: float | None = typer.Option(
         None, "--maximum-gpu-utilization-percent", min=0, max=100
     ),
+    mig_profile: str | None = typer.Option(None, "--mig-profile"),
     label: list[str] | None = typer.Option(None, "--label"),
     database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
 ) -> None:
@@ -309,6 +310,7 @@ def jobs_enqueue(
         minimum_cuda_compute_capability=minimum_cuda_compute_capability,
         minimum_gpu_memory_available_mb=minimum_gpu_memory_available_mb,
         maximum_gpu_utilization_percent=maximum_gpu_utilization_percent,
+        required_mig_profile=mig_profile,
     )
     console.print(f"queued job {job.job_id} ({job.agent_version})")
 
@@ -333,6 +335,8 @@ def jobs_list(
             requirements.append(f"gpu_free>={job.minimum_gpu_memory_available_mb}MiB")
         if job.maximum_gpu_utilization_percent is not None:
             requirements.append(f"utilization<={job.maximum_gpu_utilization_percent:g}%")
+        if job.required_mig_profile is not None:
+            requirements.append(f"mig_profile={job.required_mig_profile}")
         gpu_requirement = f" {' '.join(requirements)}" if requirements else ""
         console.print(
             f"{job.job_id} {job.status} {job.agent_version} "
