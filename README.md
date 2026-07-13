@@ -85,6 +85,12 @@ and prevents stale workers from acknowledging work they no longer own. See
 [`docs/distributed-execution.md`](docs/distributed-execution.md) for the state machine and delivery
 semantics.
 
+API requests and durable jobs preserve W3C trace context across PostgreSQL queue boundaries. Local
+runs emit structured JSON spans; setting `OTEL_EXPORTER_OTLP_ENDPOINT` enables batched OTLP/HTTP
+protobuf export from APIs and workers without changing application code. See
+[`docs/distributed-tracing.md`](docs/distributed-tracing.md) for collector configuration and the
+telemetry privacy contract.
+
 Workers also refresh NVIDIA GPU telemetry through `nvidia-smi` on lease heartbeats. Jobs can request
 `cpu` or `cuda` and exact-match pool labels; Prometheus exposes per-device memory, utilization,
 temperature, and power gauges. Incompatible workers skip jobs without consuming an attempt. See
@@ -231,7 +237,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.30.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.31.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 

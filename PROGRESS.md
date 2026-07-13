@@ -76,6 +76,8 @@
   coverage, bounded reporting windows, dashboard comparisons, SDK, CLI, and Prometheus metrics.
 - Optional LangGraph v2 runtime adapter with injected engine execution, graph/subgraph trajectories,
   mapped tool evidence, bounded redacted capture, deterministic demo, and real-library contracts.
+- Batched OpenTelemetry OTLP/HTTP export with exact W3C parent continuity, fail-soft local logging,
+  sanitized diagnostics, and API/worker lifecycle flushing.
 
 ## Verification
 

@@ -2,6 +2,7 @@
 
 PODMAN_ENV = case "$${XDG_DATA_HOME:-}" in "$$HOME"/snap/code/*/.local/share) unset XDG_DATA_HOME ;; esac;
 CONTAINER_ENGINE ?= podman
+CONTAINER_RUN_FLAGS ?=
 DATABASE_URL ?= postgresql://aecontrol@127.0.0.1:55432/aecontrol
 PORT ?= 8000
 
@@ -78,10 +79,11 @@ docker-build:
 	$(PODMAN_ENV) $(CONTAINER_ENGINE) build -t aecontrol:local .
 
 docker-demo:
-	$(PODMAN_ENV) $(CONTAINER_ENGINE) run --rm -v "$$(pwd)/reports:/app/reports:Z" aecontrol:local make demo
+	$(PODMAN_ENV) $(CONTAINER_ENGINE) run --rm $(CONTAINER_RUN_FLAGS) -v "$$(pwd)/reports:/app/reports:Z" aecontrol:local make demo
 
 podman-build: docker-build
 
+podman-demo: CONTAINER_RUN_FLAGS := --userns=keep-id:uid=10001,gid=10001
 podman-demo: docker-demo
 
 clean:

@@ -33,6 +33,11 @@ from aecontrol.ollama import OllamaClient, OllamaError
 from aecontrol.openai_compatible import OpenAICompatibleClient, OpenAICompatibleError
 from aecontrol.reports import render_html
 from aecontrol.store import ArtifactStore
+from aecontrol.telemetry import (
+    configure_telemetry_from_environment,
+    shutdown_telemetry,
+    telemetry_configuration_from_environment,
+)
 
 app = typer.Typer(help="AgentEval Control Plane CLI")
 datasets_app = typer.Typer(help="Dataset commands")
@@ -69,6 +74,11 @@ def doctor() -> None:
     console.print(f"sandbox: {backend}")
     if backend == "podman":
         console.print(f"podman: {shutil.which('podman') or 'not found'}")
+    telemetry = telemetry_configuration_from_environment()
+    telemetry_detail = (
+        f"{telemetry.mode} host={telemetry.endpoint_host}" if telemetry.enabled else telemetry.mode
+    )
+    console.print(f"telemetry: {telemetry_detail}")
 
 
 @auth_app.command("hash-key")
@@ -422,19 +432,23 @@ def worker(
     label: list[str] | None = typer.Option(None, "--label"),
 ) -> None:
     """Claim and execute durable evaluation jobs."""
-    resolved_worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}"
-    evaluation_worker = EvaluationWorker(
-        ArtifactStore(database_url),
-        resolved_worker_id,
-        lease_seconds,
-        detect_worker_capabilities(_parse_labels(label)),
-    )
-    if once:
-        job = asyncio.run(evaluation_worker.run_once())
-        console.print("queue empty" if job is None else f"job {job.job_id}: {job.status}")
-        return
-    console.print(f"worker {resolved_worker_id} polling for jobs")
-    asyncio.run(evaluation_worker.run_forever(poll_seconds))
+    configure_telemetry_from_environment()
+    try:
+        resolved_worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}"
+        evaluation_worker = EvaluationWorker(
+            ArtifactStore(database_url),
+            resolved_worker_id,
+            lease_seconds,
+            detect_worker_capabilities(_parse_labels(label)),
+        )
+        if once:
+            job = asyncio.run(evaluation_worker.run_once())
+            console.print("queue empty" if job is None else f"job {job.job_id}: {job.status}")
+            return
+        console.print(f"worker {resolved_worker_id} polling for jobs")
+        asyncio.run(evaluation_worker.run_forever(poll_seconds))
+    finally:
+        shutdown_telemetry()
 
 
 @app.command("hardware")

@@ -21,9 +21,24 @@ During rotation, retain old keys in `artifact-signing-keys`, change `artifact-si
 restart every workload before verifying the store. A production cluster should source these values
 from an external secret manager rather than committing key material.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.30.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.31.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
+
+To export distributed traces, inject the same collector configuration into the API and every worker
+deployment. The repository does not bundle or operate a collector:
+
+```bash
+kubectl -n aecontrol set env deployment/api deployment/worker-cpu deployment/worker-gpu \
+  OTEL_SERVICE_NAME=aecontrol \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.observability:4318 \
+  OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+kubectl -n aecontrol rollout status deployment/api
+```
+
+Place authenticated exporter headers in a Secret-backed environment variable, not directly in a
+Kustomization or shell history. See [`distributed-tracing.md`](distributed-tracing.md) for supported
+variables and attribute limits.
 
 The included PostgreSQL instance is for portfolio and development clusters. Production deployments
 should use a managed PostgreSQL service, external secret management, network policies, TLS ingress,

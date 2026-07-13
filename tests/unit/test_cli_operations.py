@@ -25,6 +25,45 @@ from aecontrol.models import (
 from aecontrol.openai_compatible import CompatibleModel
 
 
+def test_doctor_reports_sanitized_telemetry_destination(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv(
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "https://collector-user:collector-secret@traces.example:4318",
+    )
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "telemetry: otlp/http host=traces.example" in result.output
+    assert "collector-user" not in result.output
+    assert "collector-secret" not in result.output
+
+
+def test_one_shot_worker_always_shuts_down_telemetry(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    events: list[str] = []
+
+    class Worker:
+        def __init__(self, *_args, **_kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        async def run_once(self):  # type: ignore[no-untyped-def]
+            return None
+
+    monkeypatch.setattr(
+        "aecontrol.cli.configure_telemetry_from_environment", lambda: events.append("start")
+    )
+    monkeypatch.setattr("aecontrol.cli.shutdown_telemetry", lambda: events.append("shutdown"))
+    monkeypatch.setattr("aecontrol.cli.ArtifactStore", lambda _database_url: object())
+    monkeypatch.setattr("aecontrol.cli.EvaluationWorker", Worker)
+    monkeypatch.setattr("aecontrol.cli.detect_worker_capabilities", lambda _labels: object())
+
+    result = CliRunner().invoke(app, ["worker", "--once"])
+
+    assert result.exit_code == 0
+    assert "queue empty" in result.output
+    assert events == ["start", "shutdown"]
+
+
 def test_hardware_command_supports_human_and_json_output() -> None:
     runner = CliRunner()
 
