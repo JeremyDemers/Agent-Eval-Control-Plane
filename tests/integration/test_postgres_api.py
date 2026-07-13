@@ -4,6 +4,7 @@ import asyncio
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import psycopg
@@ -1254,3 +1255,87 @@ def test_gpu_capacity_forecast_spans_api_dashboard_and_metrics(api_client: TestC
         "average_seconds": pytest.approx(120),
         "p90_seconds": pytest.approx(120),
     }
+
+
+def test_gpu_demand_forecast_spans_postgres_api_dashboard_and_metrics(
+    api_client: TestClient,
+) -> None:
+    store: ArtifactStore = api_client.app.state.store
+    observed = datetime.now(UTC)
+    store.register_worker(
+        "demand-gpu-worker",
+        WorkerCapabilities(
+            hostname="demand-gpu-worker",
+            operating_system="linux",
+            architecture="x86_64",
+            cpu_count=16,
+            accelerators=[Accelerator.CPU, Accelerator.CUDA],
+            gpus=[
+                GpuDevice(
+                    uuid="GPU-demand",
+                    name="NVIDIA H100",
+                    memory_total_mb=81920,
+                    compute_capability="9.0",
+                )
+            ],
+        ),
+    )
+    historical_jobs = [
+        store.enqueue_job(
+            "examples/suites/coding_repair.yaml",
+            f"nim/demand-history-{index}",
+            required_accelerator=Accelerator.CUDA,
+        )
+        for index in range(20)
+    ]
+    target_hour = observed.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    with psycopg.connect(store.database_url) as connection:
+        for index, job in enumerate(historical_jobs):
+            created_at = target_hour - timedelta(weeks=index // 4 + 1)
+            connection.execute(
+                sql.SQL(
+                    """UPDATE {}.evaluation_jobs
+                       SET status = 'completed', created_at = %s,
+                           started_at = now() - interval '60 seconds', updated_at = now()
+                       WHERE job_id = %s"""
+                ).format(sql.Identifier(store.schema)),
+                (created_at, job.job_id),
+            )
+
+    queued = api_client.post(
+        "/api/v1/jobs",
+        json={
+            "suite_path": "examples/suites/coding_repair.yaml",
+            "agent_version": "nim/demand-queued",
+            "required_accelerator": "cuda",
+        },
+    )
+    assert queued.status_code == 202
+
+    response = api_client.get("/api/v1/capacity/gpu/demand")
+    assert response.status_code == 200
+    forecast = response.json()
+    assert forecast["historical_cuda_jobs"] == 20
+    assert forecast["current_queued_cuda_jobs"] == 1
+    assert forecast["current_running_cuda_jobs"] == 0
+    assert forecast["predicted_cuda_arrivals"] == pytest.approx(4)
+    assert forecast["average_cuda_duration_seconds"] == pytest.approx(60)
+    assert forecast["projected_gpu_seconds"] == pytest.approx(300)
+    assert forecast["available_gpu_seconds"] == 86400
+    assert forecast["projected_capacity_ratio"] == pytest.approx(300 / 86400)
+    assert forecast["confidence"] == "high"
+    assert forecast["saturation"] == "within_capacity"
+    busiest = max(forecast["hours"], key=lambda item: item["predicted_arrivals"])
+    assert busiest["historical_occurrences"] == 5
+    assert busiest["historical_arrivals"] == 20
+    assert busiest["predicted_arrivals"] == pytest.approx(4)
+
+    dashboard = api_client.get("/")
+    assert "GPU Demand Forecast" in dashboard.text
+    assert "24h GPU arrivals<b>4.00" in dashboard.text
+    assert "Demand confidence<b>high" in dashboard.text
+
+    metrics = api_client.get("/metrics")
+    assert "aecontrol_gpu_demand_predicted_arrivals 4.000000" in metrics.text
+    assert "aecontrol_gpu_demand_capacity_ratio 0.003472" in metrics.text
+    assert 'aecontrol_gpu_demand_confidence{level="high"} 1' in metrics.text

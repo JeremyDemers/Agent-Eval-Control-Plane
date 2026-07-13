@@ -48,6 +48,7 @@ from aecontrol.models import (
     EvaluationJob,
     EvaluationRun,
     GpuCapacityForecast,
+    GpuDemandForecast,
     GpuDevice,
     JobPlacementDiagnostic,
     JobStatus,
@@ -250,6 +251,7 @@ def create_app(
                 store.gpu_capacity_forecast(workers),
                 efficacy,
                 store.database_pool_snapshot(),
+                store.gpu_demand_forecast(workers),
             ),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
@@ -263,6 +265,12 @@ def create_app(
     )
     def gpu_capacity(_principal: Principal = Depends(require_read)) -> GpuCapacityForecast:
         return store.gpu_capacity_forecast()
+
+    @application.get(
+        "/api/v1/capacity/gpu/demand", response_model=GpuDemandForecast, tags=["operations"]
+    )
+    def gpu_demand(_principal: Principal = Depends(require_read)) -> GpuDemandForecast:
+        return store.gpu_demand_forecast()
 
     @application.get(
         "/api/v1/integrity", response_model=ArtifactIntegrityReport, tags=["operations"]
@@ -623,6 +631,7 @@ def create_app(
             store.list_guardrail_evidence(10),
             store.operational_snapshot(),
             store.gpu_capacity_forecast(workers),
+            store.gpu_demand_forecast(workers),
             efficacy,
         )
 
@@ -745,6 +754,7 @@ def _render_dashboard(
     guardrail_evidence: list[StoredGuardrailEvidenceSummary],
     snapshot: OperationalSnapshot,
     gpu_capacity: GpuCapacityForecast,
+    gpu_demand: GpuDemandForecast,
     efficacy: GuardrailEfficacyReport,
 ) -> str:
     run_rows = (
@@ -833,6 +843,19 @@ def _render_dashboard(
         if gpu_capacity.estimated_clearance_seconds is not None
         else "history needed"
     )
+    demand_ratio = (
+        f"{gpu_demand.projected_capacity_ratio:.1%}"
+        if gpu_demand.projected_capacity_ratio is not None
+        else "unavailable"
+    )
+    demand_rows = "".join(
+        f"<tr><td>{_utc_timestamp(hour.hour_start)}</td>"
+        f"<td>{hour.predicted_arrivals:.2f}</td>"
+        f"<td>{hour.historical_arrivals}/{hour.historical_occurrences}</td></tr>"
+        for hour in sorted(
+            gpu_demand.hours, key=lambda item: item.predicted_arrivals, reverse=True
+        )[:6]
+    )
     return _page(
         "Runs",
         f"""<h1>Evaluation Runs</h1><p class="muted">Durable agent evidence and release decisions.</p>
@@ -845,9 +868,13 @@ def _render_dashboard(
 <div class="metric">Policy accuracy<b>{_optional_percent(efficacy_accuracy)}</b></div>
 <div class="metric">GPU first wave<b>{gpu_capacity.first_wave_jobs}/{gpu_capacity.queued_cuda_jobs}</b></div>
 <div class="metric">GPU clearance<b>{gpu_capacity.minimum_clearance_waves} waves</b></div>
-<div class="metric">GPU queue ETA<b>{clearance_eta}</b></div></div>
+<div class="metric">GPU queue ETA<b>{clearance_eta}</b></div>
+<div class="metric">24h GPU arrivals<b>{gpu_demand.predicted_cuda_arrivals:.2f}</b></div>
+<div class="metric">Projected GPU load<b>{demand_ratio}</b></div>
+<div class="metric">Demand confidence<b>{gpu_demand.confidence}</b></div></div>
 <h2>Worker Inventory</h2><table><thead><tr><th>Worker</th><th>Host</th><th>Accelerators</th><th>GPU</th><th>Last Seen</th></tr></thead><tbody>{worker_rows}</tbody></table>
 <h2>GPU Capacity Forecast</h2><table><thead><tr><th>Job</th><th>Agent</th><th>Priority</th><th>State</th><th>Matching Workers</th><th>First-Wave Worker</th></tr></thead><tbody>{capacity_rows}</tbody></table>
+<h2>GPU Demand Forecast</h2><p class="muted">State: {gpu_demand.saturation.replace("_", " ")} · UTC hour-of-week history</p><table><thead><tr><th>Hour</th><th>Predicted Arrivals</th><th>Historical Arrivals/Slots</th></tr></thead><tbody>{demand_rows}</tbody></table>
 <h2>Evaluation Queue</h2><table><thead><tr><th>Job</th><th>Agent</th><th>Status</th><th>Requires</th><th>Priority</th><th>Attempts</th><th>Worker</th></tr></thead><tbody>{job_rows}</tbody></table>
 <h2>Recent Runs</h2><table><thead><tr><th>Agent</th><th>Suite</th><th>Cases</th><th>Hidden pass</th><th>Completed</th></tr></thead><tbody>{run_rows}</tbody></table>
 <h2>Release Decisions</h2><table><thead><tr><th>ID</th><th>Gate</th><th>Pairs</th><th>Delta</th><th>Created</th></tr></thead><tbody>{comparison_rows}</tbody></table>

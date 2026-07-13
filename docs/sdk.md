@@ -19,6 +19,7 @@ job = client.enqueue_job(
 )
 placement = client.explain_job(job.job_id)
 capacity = client.gpu_capacity()
+demand = client.gpu_demand()
 integrity = client.verify_artifacts()
 completed = client.wait_for_job(job.job_id)
 run = client.get_run(completed.run_id) if completed.run_id else None
@@ -34,9 +35,9 @@ efficacy = client.guardrail_efficacy(config_id="content_safety")
 
 `AsyncAgentEvalClient` provides matching coroutine methods and uses non-blocking polling for terminal
 job state. Both clients support health and operational snapshots, direct evaluations, job listing,
-placement diagnostics, sample-qualified GPU queue capacity forecasts, artifact-integrity audits and
-cancellation, run retrieval, comparison creation/retrieval, and durable NeMo Guardrails evidence
-workflows.
+placement diagnostics, sample-qualified GPU queue capacity and seasonal demand forecasts,
+artifact-integrity audits and cancellation, run retrieval, comparison creation/retrieval, and durable
+NeMo Guardrails evidence workflows.
 
 Guardrails lifecycle methods include `guardrail_config_versions`,
 `register_guardrail_config_version`, `guardrail_config_activations`, and

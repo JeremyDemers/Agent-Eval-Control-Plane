@@ -36,10 +36,11 @@ Implemented ahead of the original four-day scope:
 - Digest-enforced Podman sandboxes with configurable seccomp/AppArmor policy and hardened GPU pods
 - Bounded PostgreSQL connection pools, saturation metrics, and advisory-locked schema initialization
 - DCGM Exporter-backed full-GPU and pod-mapped MIG admission telemetry
+- Evidence-qualified UTC hour-of-week GPU demand and saturation forecasting
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
-- PostgreSQL operator/provisioning integration and seasonal GPU demand prediction
+- PostgreSQL operator/provisioning integration
 - Additional hosted provider authentication and endpoint-specific adapters
 - Multi-tenancy, immutable object storage, and KMS/asymmetric attestations

@@ -452,6 +452,34 @@ def jobs_capacity(
         )
 
 
+@jobs_app.command("demand")
+def jobs_demand(
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    forecast = ArtifactStore(database_url).gpu_demand_forecast()
+    if json_output:
+        console.print(forecast.model_dump_json(indent=2))
+        return
+    ratio = (
+        f"{forecast.projected_capacity_ratio:.1%}"
+        if forecast.projected_capacity_ratio is not None
+        else "unavailable"
+    )
+    console.print(
+        f"GPU demand ({forecast.horizon_hours}h): arrivals={forecast.predicted_cuda_arrivals:.2f}, "
+        f"queued={forecast.current_queued_cuda_jobs}, running={forecast.current_running_cuda_jobs}, "
+        f"capacity={ratio}, "
+        f"state={forecast.saturation}, confidence={forecast.confidence}"
+    )
+    busiest = sorted(forecast.hours, key=lambda item: item.predicted_arrivals, reverse=True)[:5]
+    for hour in busiest:
+        console.print(
+            f"- {hour.hour_start.isoformat()}: predicted={hour.predicted_arrivals:.2f} "
+            f"history={hour.historical_arrivals}/{hour.historical_occurrences}"
+        )
+
+
 @app.command()
 def worker(
     database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),

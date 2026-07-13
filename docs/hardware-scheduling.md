@@ -147,6 +147,37 @@ observational: changing
 telemetry, worker arrivals, retries, heterogeneous task durations, and runtime failures can change
 actual clearance time.
 
+## Seasonal GPU Demand Forecast
+
+The demand forecast complements the point-in-time queue forecast with a 24-hour planning horizon.
+PostgreSQL aggregates at most eight weeks of CUDA job creation into UTC hourly buckets. For each
+future hour, AgentEval divides arrivals in the matching weekday/hour by the number of matching slots
+actually observed since the control plane's first job. This preserves zero-arrival hours without
+pretending a newly deployed control plane has eight complete weeks of evidence.
+
+```bash
+uv run aecontrol jobs demand
+uv run aecontrol jobs demand --json
+curl http://127.0.0.1:8000/api/v1/capacity/gpu/demand
+```
+
+Projected GPU seconds include current queued and running CUDA jobs plus predicted arrivals, multiplied
+by the all-CUDA average completed duration. Counting a running job for a full average duration is a
+conservative substitute for unknown remaining time. Available GPU seconds use active CUDA workers
+because the lease protocol runs one evaluation per worker. Capacity ratio bands are `within_capacity` below 80%,
+`at_risk` from 80% through 100%, and `over_capacity` above 100%. Missing duration history or active
+capacity produces `unavailable` rather than infinity or a synthetic zero.
+
+Confidence is `high` only with at least four weeks of observed hourly slots, 20 historical CUDA
+arrivals, and 10 completed duration samples. The forecast remains `low` with partial evidence and
+`unavailable` without arrivals or durations. REST, sync/async SDKs, CLI, dashboard, and Prometheus
+expose the same evidence. Prometheus exports only aggregate predicted arrivals, capacity ratio, and a
+fixed confidence enum; hourly timestamps are intentionally excluded from labels.
+
+The model captures recurring arrival seasonality, not model-specific demand, holidays, deployments,
+GPU heterogeneity, autoscaler startup, or trends. Operators should treat it as a transparent baseline
+for capacity planning and compare predictions with realized demand before acting on it.
+
 GPU discovery is optional and fail-safe. Missing binaries, timeouts, command failures, and malformed
 device rows result in a CPU-only capability document. No synthetic GPU is reported. Operators can
 inspect discovery with `aecontrol hardware --json`, and the browser dashboard shows registered worker

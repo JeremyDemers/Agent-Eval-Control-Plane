@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -19,6 +19,8 @@ from aecontrol.models import (
     Accelerator,
     EvaluationJob,
     GpuCapacityForecast,
+    GpuDemandForecast,
+    GpuDemandHour,
     GpuDurationEstimate,
     GpuQueueJobForecast,
 )
@@ -266,6 +268,56 @@ def test_gpu_capacity_command_supports_human_and_json_output(monkeypatch) -> Non
     assert "history all-cuda: n=3 average=30.0s p90=45.0s" in human.output
     assert payload.exit_code == 0
     assert '"minimum_clearance_waves": 1' in payload.output
+
+
+def test_gpu_demand_command_supports_human_and_json_output(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    observed_at = datetime(2026, 7, 13, 18, tzinfo=UTC)
+    forecast = GpuDemandForecast(
+        observed_at=observed_at,
+        history_start=observed_at - timedelta(days=56),
+        lookback_days=56,
+        horizon_hours=24,
+        historical_cuda_jobs=24,
+        observed_history_hours=1344,
+        current_queued_cuda_jobs=2,
+        current_running_cuda_jobs=1,
+        predicted_cuda_arrivals=3.5,
+        average_cuda_duration_seconds=600,
+        projected_gpu_seconds=3900,
+        available_gpu_seconds=86400,
+        projected_capacity_ratio=0.045139,
+        active_cuda_workers=1,
+        confidence="high",
+        saturation="within_capacity",
+        hours=[
+            GpuDemandHour(
+                hour_start=observed_at + timedelta(hours=1),
+                historical_occurrences=8,
+                historical_arrivals=12,
+                predicted_arrivals=1.5,
+            )
+        ],
+    )
+
+    class Store:
+        def __init__(self, _database_url: str) -> None:
+            pass
+
+        def gpu_demand_forecast(self) -> GpuDemandForecast:
+            return forecast
+
+    monkeypatch.setattr("aecontrol.cli.ArtifactStore", Store)
+    human = CliRunner().invoke(app, ["jobs", "demand"])
+    payload = CliRunner().invoke(app, ["jobs", "demand", "--json"])
+
+    assert human.exit_code == 0
+    assert "arrivals=3.50, queued=2, running=1" in human.output
+    assert "capacity=4.5%" in human.output
+    assert "state=within_capacity" in human.output
+    assert "confidence=high" in human.output
+    assert "history=12/8" in human.output
+    assert payload.exit_code == 0
+    assert '"predicted_cuda_arrivals": 3.5' in payload.output
 
 
 def test_openai_compatible_cli_commands(monkeypatch) -> None:  # type: ignore[no-untyped-def]
