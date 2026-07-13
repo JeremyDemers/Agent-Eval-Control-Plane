@@ -380,6 +380,34 @@ class JobPlacementDiagnostic(BaseModel):
     workers: list[WorkerPlacementDiagnostic]
 
 
+class GpuQueueJobForecast(BaseModel):
+    job_id: UUID
+    agent_version: str
+    priority: int
+    state: Literal["first_wave", "deferred", "blocked"]
+    matching_workers: int = Field(ge=0)
+    assigned_worker_id: str | None = None
+    blockers: list[str] = Field(default_factory=list)
+
+
+class GpuCapacityForecast(BaseModel):
+    observed_at: datetime
+    active_worker_window_seconds: int = Field(gt=0)
+    active_cuda_workers: int = Field(ge=0)
+    active_gpus: int = Field(ge=0)
+    memory_telemetry_gpus: int = Field(ge=0)
+    utilization_telemetry_gpus: int = Field(ge=0)
+    total_gpu_memory_mb: int = Field(ge=0)
+    available_gpu_memory_mb: int = Field(ge=0)
+    average_gpu_utilization_percent: float | None = Field(default=None, ge=0, le=100)
+    queued_cuda_jobs: int = Field(ge=0)
+    first_wave_jobs: int = Field(ge=0)
+    deferred_jobs: int = Field(ge=0)
+    blocked_jobs: int = Field(ge=0)
+    minimum_clearance_waves: int = Field(ge=0)
+    jobs: list[GpuQueueJobForecast]
+
+
 class OperationalSnapshot(BaseModel):
     runs_total: int = Field(ge=0)
     comparisons_total: int = Field(ge=0)

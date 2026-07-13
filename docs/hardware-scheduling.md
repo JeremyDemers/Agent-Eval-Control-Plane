@@ -52,6 +52,33 @@ ineligible rather than optimistically treating the sample as idle. Placement dia
 missing telemetry, insufficient free memory, excessive utilization, and requirements split across
 different devices.
 
+## GPU Queue Capacity Forecast
+
+The read-only capacity forecast evaluates all queued CUDA jobs against the same placement function
+used by per-job diagnostics. It sorts jobs by priority and creation time, then uses bipartite maximum
+matching so flexible jobs can move to alternate workers instead of occupying the only worker capable
+of running a constrained job.
+
+```bash
+uv run aecontrol jobs capacity
+uv run aecontrol jobs capacity --json
+curl http://127.0.0.1:8000/api/v1/capacity/gpu
+```
+
+Each job is classified as `first_wave`, `deferred`, or `blocked`. First-wave jobs have a dry-run worker
+assignment. Deferred jobs match active workers but exceed the current one-job-per-worker scheduling
+wave. Blocked jobs have no active eligible worker and retain the placement diagnostic's blocker.
+
+`minimum_clearance_waves` is calculated by expanding each worker into successively larger wave slots
+and finding the first complete matching for every compatible job. It is exact for the current static
+eligibility graph; it does not predict execution duration, worker arrivals, telemetry changes, or GPU
+load after process startup. Blocked jobs are excluded from the clearance count.
+
+The forecast also summarizes active CUDA worker slots, visible devices, total and available
+framebuffer memory, and average utilization. Prometheus exports low-cardinality queue-state,
+clearance-wave, and active-worker gauges. The browser dashboard displays the same forecast and
+first-wave worker assignments.
+
 GPU discovery is optional and fail-safe. Missing binaries, timeouts, command failures, and malformed
 device rows result in a CPU-only capability document. No synthetic GPU is reported. Operators can
 inspect discovery with `aecontrol hardware --json`, and the browser dashboard shows registered worker

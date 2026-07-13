@@ -8,6 +8,7 @@ import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from html import escape
 from importlib.metadata import version
 from pathlib import Path
@@ -37,6 +38,7 @@ from aecontrol.models import (
     CaseResult,
     EvaluationJob,
     EvaluationRun,
+    GpuCapacityForecast,
     GpuDevice,
     JobPlacementDiagnostic,
     JobStatus,
@@ -193,14 +195,23 @@ def create_app(
 
     @application.get("/metrics", include_in_schema=False)
     def metrics() -> PlainTextResponse:
+        workers = store.list_workers()
         return PlainTextResponse(
-            render_prometheus(store.operational_snapshot(), store.list_workers()),
+            render_prometheus(
+                store.operational_snapshot(), workers, store.gpu_capacity_forecast(workers)
+            ),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
     @application.get("/api/v1/operations", response_model=OperationalSnapshot, tags=["operations"])
     def operations(_principal: Principal = Depends(require_read)) -> OperationalSnapshot:
         return store.operational_snapshot()
+
+    @application.get(
+        "/api/v1/capacity/gpu", response_model=GpuCapacityForecast, tags=["operations"]
+    )
+    def gpu_capacity(_principal: Principal = Depends(require_read)) -> GpuCapacityForecast:
+        return store.gpu_capacity_forecast()
 
     @application.get(
         "/api/v1/integrity", response_model=ArtifactIntegrityReport, tags=["operations"]
@@ -430,13 +441,15 @@ def create_app(
 
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)
     def dashboard() -> str:
+        workers = store.list_workers()
         return _render_dashboard(
             store.list_runs(),
             store.list_comparisons(),
             store.list_jobs(),
-            store.list_workers(),
+            workers,
             store.list_guardrail_evidence(10),
             store.operational_snapshot(),
+            store.gpu_capacity_forecast(workers),
         )
 
     @application.get("/runs/{run_id}", response_class=HTMLResponse, include_in_schema=False)
@@ -525,8 +538,9 @@ h2{{font-size:17px;margin:26px 0 10px}}p{{margin:5px 0}}.muted{{color:var(--mute
 background:var(--paper);border:1px solid var(--line)}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);
 text-align:left;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:var(--muted);background:#f9fafb}}
 tr:last-child td{{border-bottom:0}}a{{color:var(--blue)}}.PASS,.passed{{color:var(--green);font-weight:700}}
-.BLOCK,.failed,.error,.regressed,.intervened{{color:var(--red);font-weight:700}}.WARN,.queued{{color:var(--amber);font-weight:700}}
-.completed{{color:var(--green);font-weight:700}}.running{{color:var(--blue);font-weight:700}}
+.BLOCK,.failed,.error,.regressed,.intervened,.blocked{{color:var(--red);font-weight:700}}
+.WARN,.queued,.deferred{{color:var(--amber);font-weight:700}}
+.completed,.first_wave{{color:var(--green);font-weight:700}}.running{{color:var(--blue);font-weight:700}}
 details{{background:#fff;border:1px solid var(--line);border-radius:6px;margin:8px 0;padding:10px 12px}}
 summary{{cursor:pointer;font-weight:650}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#111820;color:#e8edf2;
 padding:14px;border-radius:5px;font:12px/1.5 ui-monospace,monospace}}.tag{{display:inline-block;border:1px solid var(--line);
@@ -544,12 +558,13 @@ def _render_dashboard(
     workers: list[WorkerRecord],
     guardrail_evidence: list[StoredGuardrailEvidenceSummary],
     snapshot: OperationalSnapshot,
+    gpu_capacity: GpuCapacityForecast,
 ) -> str:
     run_rows = (
         "".join(
             f"<tr><td><a href='/runs/{row.run_id}'>{escape(row.agent_version)}</a></td>"
             f"<td>{escape(row.suite_name)}</td><td>{row.case_count}</td>"
-            f"<td>{row.hidden_pass_rate:.1%}</td><td>{row.completed_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>"
+            f"<td>{row.hidden_pass_rate:.1%}</td><td>{_utc_timestamp(row.completed_at)}</td></tr>"
             for row in runs
         )
         or "<tr><td colspan='5'>No persisted runs yet.</td></tr>"
@@ -558,7 +573,7 @@ def _render_dashboard(
         "".join(
             f"<tr><td><a href='/comparisons/{row.comparison_id}'>{str(row.comparison_id)[:8]}</a></td>"
             f"<td class='{row.outcome}'>{row.outcome}</td><td>{row.paired_cases}</td>"
-            f"<td>{row.aggregate_pass_rate_delta:+.1%}</td><td>{row.created_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>"
+            f"<td>{row.aggregate_pass_rate_delta:+.1%}</td><td>{_utc_timestamp(row.created_at)}</td></tr>"
             for row in comparisons
         )
         or "<tr><td colspan='5'>No persisted comparisons yet.</td></tr>"
@@ -579,7 +594,7 @@ def _render_dashboard(
             f"<tr><td>{escape(row.worker_id)}</td><td>{escape(row.capabilities.hostname)}</td>"
             f"<td>{escape(', '.join(item.value for item in row.capabilities.accelerators))}</td>"
             f"<td>{escape(', '.join(_gpu_summary(gpu) for gpu in row.capabilities.gpus) or '-')}</td>"
-            f"<td>{row.last_seen_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>"
+            f"<td>{_utc_timestamp(row.last_seen_at)}</td></tr>"
             for row in workers
         )
         or "<tr><td colspan='5'>No workers have registered.</td></tr>"
@@ -590,7 +605,7 @@ def _render_dashboard(
             f"<td>{escape(row.config_id)}</td><td>{escape(row.model)}</td>"
             f"<td class='{'passed' if row.passed_through else 'intervened'}'>"
             f"{'Pass-through' if row.passed_through else 'Intervention'}</td>"
-            f"<td>{row.created_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>"
+            f"<td>{_utc_timestamp(row.created_at)}</td></tr>"
             for row in guardrail_evidence
         )
         or "<tr><td colspan='5'>No Guardrails evidence yet.</td></tr>"
@@ -601,6 +616,15 @@ def _render_dashboard(
         if snapshot.guardrail_evidence_total
         else 0
     )
+    capacity_rows = (
+        "".join(
+            f"<tr><td>{str(row.job_id)[:8]}</td><td>{escape(row.agent_version)}</td>"
+            f"<td>{row.priority}</td><td class='{row.state}'>{escape(row.state.replace('_', ' '))}</td>"
+            f"<td>{row.matching_workers}</td><td>{escape(row.assigned_worker_id or '-')}</td></tr>"
+            for row in gpu_capacity.jobs
+        )
+        or "<tr><td colspan='6'>No CUDA jobs are queued.</td></tr>"
+    )
     return _page(
         "Runs",
         f"""<h1>Evaluation Runs</h1><p class="muted">Durable agent evidence and release decisions.</p>
@@ -608,8 +632,11 @@ def _render_dashboard(
 <div class="metric">Active jobs<b>{active_jobs}</b></div>
 <div class="metric">Comparisons<b>{len(comparisons)}</b></div>
 <div class="metric">Safety checks<b>{snapshot.guardrail_evidence_total}</b></div>
-<div class="metric">Intervention rate<b>{intervention_rate:.1%}</b></div></div>
+<div class="metric">Intervention rate<b>{intervention_rate:.1%}</b></div>
+<div class="metric">GPU first wave<b>{gpu_capacity.first_wave_jobs}/{gpu_capacity.queued_cuda_jobs}</b></div>
+<div class="metric">GPU clearance<b>{gpu_capacity.minimum_clearance_waves} waves</b></div></div>
 <h2>Worker Inventory</h2><table><thead><tr><th>Worker</th><th>Host</th><th>Accelerators</th><th>GPU</th><th>Last Seen</th></tr></thead><tbody>{worker_rows}</tbody></table>
+<h2>GPU Capacity Forecast</h2><table><thead><tr><th>Job</th><th>Agent</th><th>Priority</th><th>State</th><th>Matching Workers</th><th>First-Wave Worker</th></tr></thead><tbody>{capacity_rows}</tbody></table>
 <h2>Evaluation Queue</h2><table><thead><tr><th>Job</th><th>Agent</th><th>Status</th><th>Requires</th><th>Priority</th><th>Attempts</th><th>Worker</th></tr></thead><tbody>{job_rows}</tbody></table>
 <h2>Recent Runs</h2><table><thead><tr><th>Agent</th><th>Suite</th><th>Cases</th><th>Hidden pass</th><th>Completed</th></tr></thead><tbody>{run_rows}</tbody></table>
 <h2>Release Decisions</h2><table><thead><tr><th>ID</th><th>Gate</th><th>Pairs</th><th>Delta</th><th>Created</th></tr></thead><tbody>{comparison_rows}</tbody></table>
@@ -627,6 +654,10 @@ def _gpu_summary(gpu: GpuDevice) -> str:
         telemetry.append(f"{gpu.temperature_celsius:.0f} C")
     suffix = f" ({', '.join(telemetry)})" if telemetry else ""
     return f"GPU {gpu.index}: {gpu.name}{suffix}"
+
+
+def _utc_timestamp(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _job_requirement(job: EvaluationJob) -> str:
@@ -723,7 +754,7 @@ def _render_guardrail_evidence(artifact: StoredGuardrailEvidence) -> str:
     return _page(
         f"Guardrail evidence {str(artifact.evidence_id)[:8]}",
         f"""<h1>Guardrail Check <span class="{status_class}">{status_label}</span></h1>
-<p class="muted">Evidence {artifact.evidence_id} · {artifact.created_at:%Y-%m-%d %H:%M:%S} UTC</p>
+<p class="muted">Evidence {artifact.evidence_id} · {_utc_timestamp(artifact.created_at)}</p>
 <div class="metrics"><div class="metric">Configuration<b>{escape(evidence.config_id)}</b></div>
 <div class="metric">Model<b>{escape(evidence.model)}</b></div>
 <div class="metric">Activated rails<b>{rail_count}</b></div></div>

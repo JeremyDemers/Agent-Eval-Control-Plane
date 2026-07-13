@@ -99,11 +99,19 @@ without consuming an execution attempt.
 
 ```bash
 uv run aecontrol jobs explain JOB_ID
+uv run aecontrol jobs capacity
+curl http://127.0.0.1:8000/api/v1/capacity/gpu
 ```
+
+The GPU capacity forecast runs every queued CUDA job through the real accelerator, label, memory,
+compute-capability, and live-load constraints. A priority-preserving maximum matching identifies the
+next scheduling wave without wasting specialized workers, while worker-slot matching calculates the
+minimum waves needed for all currently compatible jobs. The dashboard and Prometheus metrics separate
+jobs blocked by missing capacity from compatible jobs deferred only by slot pressure.
 
 Use `make serve PORT=8001` when port `8000` is already occupied.
 
-![PostgreSQL-backed control plane showing persisted runs and release decisions](docs/assets/control-plane-dashboard.png)
+![GPU capacity forecast matching NVIDIA A100 and L4 workers to queued NIM jobs](docs/assets/control-plane-dashboard.png)
 
 Set `DATABASE_URL` to use an existing PostgreSQL deployment. The default is shown in `.env.example`.
 API suite and policy files are restricted to `AECONTROL_INPUT_ROOT`, which defaults to `examples/`.
@@ -201,7 +209,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.24.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.25.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 

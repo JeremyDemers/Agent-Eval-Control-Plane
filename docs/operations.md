@@ -1,10 +1,11 @@
 # Operations
 
-AgentEval exposes three local operational surfaces backed by PostgreSQL.
+AgentEval exposes local operational surfaces backed by PostgreSQL.
 
 - `/healthz` verifies database connectivity and schema compatibility.
 - `/readyz` returns `503` when work is queued but no worker has heartbeated in the last two minutes.
 - `/metrics` emits Prometheus text with bounded labels for job states and gate outcomes.
+- `/api/v1/capacity/gpu` forecasts the current CUDA queue against active worker capacity.
 
 The metrics include persisted run and comparison totals, jobs by lifecycle state, gate outcomes,
 registered and active workers, expired leases, oldest queued-job age, and average completed-job
@@ -14,6 +15,8 @@ excluded.
 Per-device GPU capacity, used/available memory, utilization, temperature, and power gauges use bounded
 worker, device index, UUID, and model labels from the registered inventory, plus a sample timestamp for
 staleness detection.
+GPU queue metrics separate first-wave, deferred, and blocked jobs and expose the exact static
+clearance-wave count without job IDs, model names, or worker assignments as labels.
 
 Every HTTP response includes `X-Request-ID` and `Server-Timing`. A caller-supplied request ID is
 preserved when it contains at most 64 alphanumeric, dot, underscore, or hyphen characters; otherwise

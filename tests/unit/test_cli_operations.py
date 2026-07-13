@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from aecontrol.cli import _parse_labels, app
 from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig
-from aecontrol.models import Accelerator, EvaluationJob
+from aecontrol.models import Accelerator, EvaluationJob, GpuCapacityForecast, GpuQueueJobForecast
 from aecontrol.openai_compatible import CompatibleModel
 
 
@@ -93,6 +93,57 @@ def test_gpu_load_options_are_forwarded_and_rendered(monkeypatch) -> None:  # ty
     assert captured["maximum_gpu_utilization_percent"] == 25
     assert "gpu_free>=4096MiB utilization<=25%" in listed.output
     assert "gpu_memory" not in listed.output
+
+
+def test_gpu_capacity_command_supports_human_and_json_output(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    job = EvaluationJob(
+        suite_path="suite.yaml",
+        agent_version="nim/model",
+        required_accelerator=Accelerator.CUDA,
+    )
+    forecast = GpuCapacityForecast(
+        observed_at=job.created_at,
+        active_worker_window_seconds=120,
+        active_cuda_workers=1,
+        active_gpus=1,
+        memory_telemetry_gpus=1,
+        utilization_telemetry_gpus=1,
+        total_gpu_memory_mb=24576,
+        available_gpu_memory_mb=20000,
+        average_gpu_utilization_percent=10,
+        queued_cuda_jobs=1,
+        first_wave_jobs=1,
+        deferred_jobs=0,
+        blocked_jobs=0,
+        minimum_clearance_waves=1,
+        jobs=[
+            GpuQueueJobForecast(
+                job_id=job.job_id,
+                agent_version=job.agent_version,
+                priority=job.priority,
+                state="first_wave",
+                matching_workers=1,
+                assigned_worker_id="gpu-worker",
+            )
+        ],
+    )
+
+    class Store:
+        def __init__(self, _database_url: str) -> None:
+            pass
+
+        def gpu_capacity_forecast(self) -> GpuCapacityForecast:
+            return forecast
+
+    monkeypatch.setattr("aecontrol.cli.ArtifactStore", Store)
+    human = CliRunner().invoke(app, ["jobs", "capacity"])
+    payload = CliRunner().invoke(app, ["jobs", "capacity", "--json"])
+
+    assert human.exit_code == 0
+    assert "first_wave=1" in human.output
+    assert "worker=gpu-worker" in human.output
+    assert payload.exit_code == 0
+    assert '"minimum_clearance_waves": 1' in payload.output
 
 
 def test_openai_compatible_cli_commands(monkeypatch) -> None:  # type: ignore[no-untyped-def]

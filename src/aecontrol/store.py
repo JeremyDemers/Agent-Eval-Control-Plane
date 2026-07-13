@@ -11,6 +11,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from aecontrol.capacity import forecast_gpu_capacity
 from aecontrol.guardrails import (
     GuardrailEvidence,
     StoredGuardrailEvidence,
@@ -28,6 +29,7 @@ from aecontrol.models import (
     ArtifactIntegrityReport,
     EvaluationJob,
     EvaluationRun,
+    GpuCapacityForecast,
     JobPlacementDiagnostic,
     JobStatus,
     OperationalSnapshot,
@@ -718,6 +720,19 @@ class ArtifactStore:
 
     def placement_diagnostic(self, job_id: UUID) -> JobPlacementDiagnostic:
         return diagnose_placement(self.get_job(job_id), self.list_workers())
+
+    def gpu_capacity_forecast(
+        self, workers: list[WorkerRecord] | None = None
+    ) -> GpuCapacityForecast:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM evaluation_jobs
+                   WHERE status = 'queued' AND required_accelerator = 'cuda'
+                   ORDER BY priority DESC, created_at, job_id"""
+            ).fetchall()
+        jobs = [EvaluationJob.model_validate(row) for row in rows]
+        return forecast_gpu_capacity(jobs, workers if workers is not None else self.list_workers())
 
     def lease_job(
         self,

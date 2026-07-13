@@ -1,4 +1,5 @@
 from aecontrol.models import (
+    GpuCapacityForecast,
     GpuDevice,
     OperationalSnapshot,
     WorkerCapabilities,
@@ -47,7 +48,24 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
         registered_at=utc_now(),
         last_seen_at=utc_now(),
     )
-    payload = render_prometheus(snapshot, [worker])
+    capacity = GpuCapacityForecast(
+        observed_at=utc_now(),
+        active_worker_window_seconds=120,
+        active_cuda_workers=1,
+        active_gpus=1,
+        memory_telemetry_gpus=1,
+        utilization_telemetry_gpus=1,
+        total_gpu_memory_mb=16000,
+        available_gpu_memory_mb=12000,
+        average_gpu_utilization_percent=25,
+        queued_cuda_jobs=4,
+        first_wave_jobs=1,
+        deferred_jobs=2,
+        blocked_jobs=1,
+        minimum_clearance_waves=3,
+        jobs=[],
+    )
+    payload = render_prometheus(snapshot, [worker], capacity)
 
     assert "aecontrol_runs_total 3" in payload
     assert "aecontrol_guardrail_evidence_total 4" in payload
@@ -66,3 +84,8 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
     assert "aecontrol_gpu_temperature_celsius" in payload
     assert "aecontrol_gpu_power_draw_watts" in payload
     assert "aecontrol_gpu_telemetry_timestamp_seconds" in payload
+    assert 'aecontrol_gpu_queue_jobs{state="first_wave"} 1' in payload
+    assert 'aecontrol_gpu_queue_jobs{state="deferred"} 2' in payload
+    assert 'aecontrol_gpu_queue_jobs{state="blocked"} 1' in payload
+    assert "aecontrol_gpu_queue_clearance_waves 3" in payload
+    assert "aecontrol_gpu_active_workers 1" in payload

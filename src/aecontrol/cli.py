@@ -368,6 +368,32 @@ def jobs_explain(
         console.print(f"- {worker.worker_id}: {result}")
 
 
+@jobs_app.command("capacity")
+def jobs_capacity(
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    forecast = ArtifactStore(database_url).gpu_capacity_forecast()
+    if json_output:
+        console.print(forecast.model_dump_json(indent=2))
+        return
+    console.print(
+        f"CUDA queue: {forecast.queued_cuda_jobs} jobs, "
+        f"first_wave={forecast.first_wave_jobs}, deferred={forecast.deferred_jobs}, "
+        f"blocked={forecast.blocked_jobs}, clearance={forecast.minimum_clearance_waves} waves"
+    )
+    console.print(
+        f"capacity: {forecast.active_cuda_workers} active workers, "
+        f"{forecast.active_gpus} GPUs, {forecast.available_gpu_memory_mb} MiB available"
+    )
+    for job in forecast.jobs:
+        worker = f" worker={job.assigned_worker_id}" if job.assigned_worker_id else ""
+        console.print(
+            f"- {job.job_id} {job.state} priority={job.priority} "
+            f"matching_workers={job.matching_workers}{worker}"
+        )
+
+
 @app.command()
 def worker(
     database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
