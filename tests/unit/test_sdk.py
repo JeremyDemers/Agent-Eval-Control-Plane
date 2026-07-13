@@ -42,6 +42,26 @@ def job_payload(status: JobStatus, job_id=None) -> dict[str, Any]:  # type: igno
     ).model_dump(mode="json")
 
 
+def capacity_payload() -> dict[str, Any]:
+    return {
+        "observed_at": "2026-07-13T18:00:00Z",
+        "active_worker_window_seconds": 120,
+        "active_cuda_workers": 2,
+        "active_gpus": 2,
+        "memory_telemetry_gpus": 2,
+        "utilization_telemetry_gpus": 2,
+        "total_gpu_memory_mb": 106496,
+        "available_gpu_memory_mb": 82400,
+        "average_gpu_utilization_percent": 20,
+        "queued_cuda_jobs": 3,
+        "first_wave_jobs": 2,
+        "deferred_jobs": 1,
+        "blocked_jobs": 0,
+        "minimum_clearance_waves": 2,
+        "jobs": [],
+    }
+
+
 def test_sync_client_serializes_and_waits_for_job() -> None:
     transport = FakeTransport()
     queued = job_payload(JobStatus.QUEUED)
@@ -90,6 +110,16 @@ def test_client_health_and_job_listing() -> None:
 
     assert client.health() == {"status": "ok"}
     assert client.list_jobs(JobStatus.QUEUED)[0].status == JobStatus.QUEUED
+
+
+def test_client_reads_gpu_capacity_forecast() -> None:
+    transport = FakeTransport()
+    transport.add("GET", "/api/v1/capacity/gpu", capacity_payload())
+
+    forecast = AgentEvalClient(transport=transport).gpu_capacity()
+
+    assert forecast.first_wave_jobs == 2
+    assert forecast.minimum_clearance_waves == 2
 
 
 def test_client_explains_job_placement() -> None:
@@ -221,11 +251,13 @@ async def test_async_client_health_and_collections() -> None:
     transport.add("GET", "/healthz", {"status": "ok"})
     transport.add("GET", "/api/v1/runs", [])
     transport.add("GET", "/api/v1/comparisons", [])
+    transport.add("GET", "/api/v1/capacity/gpu", capacity_payload())
     client = AsyncAgentEvalClient(transport=transport)
 
     assert await client.health() == {"status": "ok"}
     assert await client.list_runs() == []
     assert await client.list_comparisons() == []
+    assert (await client.gpu_capacity()).active_cuda_workers == 2
 
 
 @pytest.mark.asyncio

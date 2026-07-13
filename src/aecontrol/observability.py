@@ -2,10 +2,20 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from aecontrol.models import GateOutcome, JobStatus, OperationalSnapshot, WorkerRecord
+from aecontrol.models import (
+    GateOutcome,
+    GpuCapacityForecast,
+    JobStatus,
+    OperationalSnapshot,
+    WorkerRecord,
+)
 
 
-def render_prometheus(snapshot: OperationalSnapshot, workers: Iterable[WorkerRecord] = ()) -> str:
+def render_prometheus(
+    snapshot: OperationalSnapshot,
+    workers: Iterable[WorkerRecord] = (),
+    gpu_capacity: GpuCapacityForecast | None = None,
+) -> str:
     lines = [
         "# HELP aecontrol_runs_total Persisted evaluation runs.",
         "# TYPE aecontrol_runs_total gauge",
@@ -26,6 +36,22 @@ def render_prometheus(snapshot: OperationalSnapshot, workers: Iterable[WorkerRec
         f'aecontrol_jobs{{status="{status.value}"}} {snapshot.job_counts.get(status.value, 0)}'
         for status in JobStatus
     )
+    if gpu_capacity is not None:
+        lines.extend(
+            [
+                "# HELP aecontrol_gpu_queue_jobs CUDA jobs by forecast state.",
+                "# TYPE aecontrol_gpu_queue_jobs gauge",
+                f'aecontrol_gpu_queue_jobs{{state="first_wave"}} {gpu_capacity.first_wave_jobs}',
+                f'aecontrol_gpu_queue_jobs{{state="deferred"}} {gpu_capacity.deferred_jobs}',
+                f'aecontrol_gpu_queue_jobs{{state="blocked"}} {gpu_capacity.blocked_jobs}',
+                "# HELP aecontrol_gpu_queue_clearance_waves Minimum scheduling waves for compatible queued CUDA jobs.",
+                "# TYPE aecontrol_gpu_queue_clearance_waves gauge",
+                f"aecontrol_gpu_queue_clearance_waves {gpu_capacity.minimum_clearance_waves}",
+                "# HELP aecontrol_gpu_active_workers Active CUDA worker scheduling slots.",
+                "# TYPE aecontrol_gpu_active_workers gauge",
+                f"aecontrol_gpu_active_workers {gpu_capacity.active_cuda_workers}",
+            ]
+        )
     lines.extend(
         [
             "# HELP aecontrol_gate_decisions Persisted gate decisions by outcome.",

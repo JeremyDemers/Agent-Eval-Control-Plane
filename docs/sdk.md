@@ -18,6 +18,7 @@ job = client.enqueue_job(
     maximum_gpu_utilization_percent=30,
 )
 placement = client.explain_job(job.job_id)
+capacity = client.gpu_capacity()
 integrity = client.verify_artifacts()
 completed = client.wait_for_job(job.job_id)
 run = client.get_run(completed.run_id) if completed.run_id else None
@@ -31,7 +32,7 @@ guardrail = client.check_guardrails(
 
 `AsyncAgentEvalClient` provides matching coroutine methods and uses non-blocking polling for terminal
 job state. Both clients support health and operational snapshots, direct evaluations, job listing,
-placement diagnostics, artifact-integrity audits and cancellation, run retrieval, comparison
+placement diagnostics, GPU queue capacity forecasts, artifact-integrity audits and cancellation, run retrieval, comparison
 creation/retrieval, and durable NeMo Guardrails evidence workflows.
 
 The default HTTP transport accepts only absolute HTTP(S) URLs, supports caller-generated request IDs,

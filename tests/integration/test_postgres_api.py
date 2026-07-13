@@ -771,3 +771,72 @@ def test_readiness_detects_queued_work_without_workers(api_client: TestClient) -
         "active_workers": 0,
         "expired_leases": 0,
     }
+
+
+def test_gpu_capacity_forecast_spans_api_dashboard_and_metrics(api_client: TestClient) -> None:
+    store: ArtifactStore = api_client.app.state.store
+    for worker_id, memory_mb, used_mb, utilization in (
+        ("a100-worker", 81920, 20000, 30),
+        ("l4-worker", 24576, 4096, 10),
+    ):
+        store.register_worker(
+            worker_id,
+            WorkerCapabilities(
+                hostname=worker_id,
+                operating_system="linux",
+                architecture="x86_64",
+                cpu_count=16,
+                accelerators=[Accelerator.CPU, Accelerator.CUDA],
+                labels={"runtime": "nvidia-nim"},
+                gpus=[
+                    GpuDevice(
+                        uuid=f"GPU-{worker_id}",
+                        name=worker_id,
+                        memory_total_mb=memory_mb,
+                        memory_used_mb=used_mb,
+                        utilization_percent=utilization,
+                        compute_capability="9.0",
+                    )
+                ],
+            ),
+        )
+
+    for priority, memory_mb in ((10, 16000), (5, 40000), (0, 16000), (-1, 100000)):
+        response = api_client.post(
+            "/api/v1/jobs",
+            json={
+                "suite_path": "examples/suites/coding_repair.yaml",
+                "agent_version": f"nim/capacity-{priority}",
+                "priority": priority,
+                "required_accelerator": "cuda",
+                "minimum_gpu_memory_mb": memory_mb,
+            },
+        )
+        assert response.status_code == 202
+
+    response = api_client.get("/api/v1/capacity/gpu")
+    assert response.status_code == 200
+    forecast = response.json()
+    assert forecast["active_cuda_workers"] == 2
+    assert forecast["active_gpus"] == 2
+    assert forecast["available_gpu_memory_mb"] == 82400
+    assert forecast["queued_cuda_jobs"] == 4
+    assert forecast["first_wave_jobs"] == 2
+    assert forecast["deferred_jobs"] == 1
+    assert forecast["blocked_jobs"] == 1
+    assert forecast["minimum_clearance_waves"] == 2
+    assert [job["priority"] for job in forecast["jobs"]] == [10, 5, 0, -1]
+
+    dashboard = api_client.get("/")
+    assert dashboard.status_code == 200
+    assert "GPU Capacity Forecast" in dashboard.text
+    assert "GPU first wave<b>2/4" in dashboard.text
+    assert "GPU clearance<b>2 waves" in dashboard.text
+    assert "capacity-10" in dashboard.text
+
+    metrics = api_client.get("/metrics")
+    assert metrics.status_code == 200
+    assert 'aecontrol_gpu_queue_jobs{state="first_wave"} 2' in metrics.text
+    assert 'aecontrol_gpu_queue_jobs{state="deferred"} 1' in metrics.text
+    assert 'aecontrol_gpu_queue_jobs{state="blocked"} 1' in metrics.text
+    assert "aecontrol_gpu_queue_clearance_waves 2" in metrics.text

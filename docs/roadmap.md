@@ -26,11 +26,12 @@ Implemented ahead of the original four-day scope:
 - Durable, tamper-evident NeMo Guardrails checks across REST and sync/async SDKs
 - Browser Guardrails evidence explorer and low-cardinality safety metrics
 - Rotation-aware HMAC-SHA256 authenticity for persisted evaluation evidence
+- Priority-preserving GPU queue forecasts with exact static clearance-wave matching
 
 Next stages:
 
 - Pinned sandbox images with seccomp/AppArmor and microVM isolation
-- Production database/operator integration and predictive GPU capacity planning
+- Production database/operator integration and historical GPU demand prediction
 - Additional hosted provider authentication and endpoint-specific adapters
 - Deeper NeMo configuration lifecycle and LangGraph interoperability packages
 - Multi-tenancy, immutable object storage, KMS/asymmetric attestations, and external telemetry backends

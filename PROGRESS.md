@@ -66,6 +66,7 @@
 - Load-aware NVIDIA GPU admission using live free memory and utilization on one device.
 - Browser Guardrails evidence explorer with escaped diagnostics and safety metrics.
 - Rotation-aware HMAC-SHA256 signatures for runs, comparisons, and Guardrails evidence.
+- Priority-preserving CUDA queue forecasts with exact static clearance-wave matching.
 
 ## Verification
 

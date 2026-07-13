@@ -21,7 +21,7 @@ During rotation, retain old keys in `artifact-signing-keys`, change `artifact-si
 restart every workload before verifying the store. A production cluster should source these values
 from an external secret manager rather than committing key material.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.24.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.25.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 

@@ -21,6 +21,7 @@ from aecontrol.models import (
     ArtifactIntegrityReport,
     EvaluationJob,
     EvaluationRun,
+    GpuCapacityForecast,
     JobPlacementDiagnostic,
     JobStatus,
     OperationalSnapshot,
@@ -101,6 +102,11 @@ class AgentEvalClient:
     def operations(self) -> OperationalSnapshot:
         return OperationalSnapshot.model_validate(
             self.transport.request("GET", "/api/v1/operations")
+        )
+
+    def gpu_capacity(self) -> GpuCapacityForecast:
+        return GpuCapacityForecast.model_validate(
+            self.transport.request("GET", "/api/v1/capacity/gpu")
         )
 
     def verify_artifacts(self) -> ArtifactIntegrityReport:
@@ -253,6 +259,9 @@ class AsyncAgentEvalClient:
 
     async def health(self) -> JsonObject:
         return await asyncio.to_thread(self._sync.health)
+
+    async def gpu_capacity(self) -> GpuCapacityForecast:
+        return await asyncio.to_thread(self._sync.gpu_capacity)
 
     async def verify_artifacts(self) -> ArtifactIntegrityReport:
         return await asyncio.to_thread(self._sync.verify_artifacts)
