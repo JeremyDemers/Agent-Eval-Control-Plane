@@ -74,6 +74,8 @@
   version-bound signed evidence.
 - Supervised NeMo Guardrails policy efficacy by immutable version with confusion matrices, label
   coverage, bounded reporting windows, dashboard comparisons, SDK, CLI, and Prometheus metrics.
+- Optional LangGraph v2 runtime adapter with injected engine execution, graph/subgraph trajectories,
+  mapped tool evidence, bounded redacted capture, deterministic demo, and real-library contracts.
 
 ## Verification
 
@@ -87,6 +89,7 @@
 - `uvx pip-audit` against exported locked runtime dependencies: no known vulnerabilities found.
 - `make sandbox-demo`: 4/4 cases passed through networkless, read-only rootless Podman containers.
 - `make sdk-demo`: live typed SDK evaluation passed 4/4 hidden tests against a temporary service.
+- `make langgraph-demo`: injected LangGraph runtime passed 4/4 hidden tests with graph-node and tool evidence.
 - `make ollama-demo`: completed against local `llama3.2:3b`; 1/4 hidden tests passed and the release gate correctly returned BLOCK.
 - `make openai-demo`: completed through Ollama's OpenAI-compatible `/v1` API; 1/4 hidden tests passed and the release gate correctly returned BLOCK.
 - `docs/assets/regressed-report.png`: regenerated from `reports/regressed.html` with headless Chrome.
@@ -97,4 +100,4 @@
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
 - Kubernetes database/operator integration, hardened worker isolation, additional hosted providers,
-  multi-tenancy and LangGraph remain on the roadmap.
+  and multi-tenancy remain on the roadmap.

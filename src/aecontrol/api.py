@@ -895,13 +895,19 @@ def _render_case(result: CaseResult) -> str:
         for step in result.output.trajectory.steps
         if step.kind == "tool_call"
     ]
+    graph_nodes = [
+        escape(str(step.data.get("name", "unknown")))
+        for step in result.output.trajectory.steps
+        if step.kind == "graph_node" and step.data.get("phase") == "started"
+    ]
     metrics = " ".join(
         f"<span class='tag'>{escape(item.name)} {item.score:.2f}</span>"
         for item in result.evaluator_results
     )
     return f"""<details><summary>{escape(result.case.case_id)} · {escape(result.case.title)}
 <span class="{result.status}">{result.status}</span></summary>
-<p>{metrics}</p><p><b>Tools:</b> {", ".join(tools)}</p><h3>Patch</h3>
+<p>{metrics}</p><p><b>Graph nodes:</b> {", ".join(graph_nodes) or "-"}</p>
+<p><b>Tools:</b> {", ".join(tools) or "-"}</p><h3>Patch</h3>
 <pre>{escape(result.output.patch)}</pre><h3>Hidden test output</h3>
 <pre>{escape(result.output.hidden_test_output)}</pre></details>"""
 

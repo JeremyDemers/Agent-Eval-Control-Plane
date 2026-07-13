@@ -231,7 +231,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.29.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.30.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -311,6 +311,23 @@ uv run aecontrol nim models
 
 See [`docs/nvidia-nim.md`](docs/nvidia-nim.md) for hosted and self-hosted configuration, provenance,
 and credential boundaries.
+
+## LangGraph Runtime
+
+The optional LangGraph adapter evaluates compiled state graphs through the same engine, deterministic
+evaluators, release gates, and persisted trajectory contract as built-in runtimes. LangGraph v2 task,
+state, message, custom, and subgraph events become bounded graph-node evidence; final root state maps
+to a normal `AgentOutput`, including tool calls and sandbox test results.
+
+```bash
+uv sync --extra dev --extra langgraph
+make langgraph-demo
+```
+
+The checked demo executes a two-node coding-repair graph against four slices and passes 4/4 hidden
+tests without model credentials. State payload capture is disabled by default; opt-in payloads redact
+configured secret keys, and graph failures, interrupts, oversized events, or runaway streams become
+structured error evidence. See [`docs/langgraph.md`](docs/langgraph.md) for graph and output contracts.
 
 ## NeMo Guardrails Evidence
 
@@ -395,8 +412,7 @@ model limits.
 The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
 hardened isolation for untrusted code. The project consumes but does not install or reconfigure NVIDIA
 GPU Operator; production MIG telemetry should be collected with DCGM. Managed database integration,
-additional hosted providers, object storage, LangGraph adapters, and
-multi-tenancy remain in `docs/roadmap.md`.
+additional hosted providers, object storage, and multi-tenancy remain in `docs/roadmap.md`.
 
 ## Project Governance
 

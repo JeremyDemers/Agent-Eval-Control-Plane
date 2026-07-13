@@ -7,7 +7,8 @@ from aecontrol.models import AgentInput, AgentOutput, DatasetCase, EvaluationRes
 
 
 class ExecutionContext(Protocol):
-    agent_version: str
+    @property
+    def agent_version(self) -> str: ...
 
 
 class RuntimeAdapter(Protocol):

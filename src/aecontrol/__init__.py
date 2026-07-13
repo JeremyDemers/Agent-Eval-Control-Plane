@@ -14,6 +14,11 @@ from aecontrol.guardrails import (
     StoredGuardrailEvidence,
     guardrail_bundle_digest,
 )
+from aecontrol.langgraph import (
+    LangGraphCaptureOptions,
+    LangGraphOutputMapping,
+    LangGraphRuntimeAdapter,
+)
 from aecontrol.nim import NIMClient
 from aecontrol.sdk import AgentEvalClient, AsyncAgentEvalClient
 
@@ -28,6 +33,9 @@ __all__ = [
     "GuardrailEfficacyReport",
     "GuardrailEvidence",
     "GuardrailsClient",
+    "LangGraphCaptureOptions",
+    "LangGraphOutputMapping",
+    "LangGraphRuntimeAdapter",
     "NIMClient",
     "StoredGuardrailEvidence",
     "compare_runs",
