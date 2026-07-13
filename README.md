@@ -122,7 +122,9 @@ kubectl apply -k deploy/overlays/mig
 ```bash
 uv run aecontrol jobs explain JOB_ID
 uv run aecontrol jobs capacity
+uv run aecontrol jobs demand
 curl http://127.0.0.1:8000/api/v1/capacity/gpu
+curl http://127.0.0.1:8000/api/v1/capacity/gpu/demand
 ```
 
 The GPU capacity forecast runs every queued CUDA job through the real accelerator, label, memory,
@@ -136,6 +138,14 @@ the latest 500 completed CUDA jobs, including exact MIG request classes. When ev
 job has matching history, the forecast combines p90 duration with the exact clearance-wave count to
 publish a conservative queue ETA and an explicit sample-based confidence level. Missing history stays
 `unavailable` rather than producing synthetic certainty.
+
+The 24-hour GPU demand forecast groups up to eight weeks of durable CUDA arrivals by UTC
+hour-of-week. Each future hour divides matching arrivals by the number of actually observed seasonal
+slots, so zero-traffic hours remain part of the denominator. Predicted arrivals plus queued and
+running work are converted to GPU seconds using completed-attempt average duration and compared with
+active worker capacity. Confidence is high only after four weeks, 20 CUDA arrivals, and 10 duration samples;
+otherwise the API reports `low` or `unavailable`. This is a capacity-planning signal, not a claim that
+future workload behavior is deterministic.
 
 Use `make serve PORT=8001` when port `8000` is already occupied.
 
@@ -243,7 +253,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.34.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.35.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 

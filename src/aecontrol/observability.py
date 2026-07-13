@@ -7,6 +7,7 @@ from aecontrol.guardrails import GuardrailEfficacyReport
 from aecontrol.models import (
     GateOutcome,
     GpuCapacityForecast,
+    GpuDemandForecast,
     JobStatus,
     OperationalSnapshot,
     WorkerRecord,
@@ -19,6 +20,7 @@ def render_prometheus(
     gpu_capacity: GpuCapacityForecast | None = None,
     guardrail_efficacy: GuardrailEfficacyReport | None = None,
     database_pool: DatabasePoolSnapshot | None = None,
+    gpu_demand: GpuDemandForecast | None = None,
 ) -> str:
     lines = [
         "# HELP aecontrol_runs_total Persisted evaluation runs.",
@@ -141,6 +143,25 @@ def render_prometheus(
                 f'aecontrol_gpu_job_duration_samples{{mig_profile="{profile}"}} '
                 f"{estimate.sample_count}"
             )
+    if gpu_demand is not None:
+        lines.extend(
+            [
+                "# HELP aecontrol_gpu_demand_predicted_arrivals Seasonal CUDA arrivals predicted over the forecast horizon.",
+                "# TYPE aecontrol_gpu_demand_predicted_arrivals gauge",
+                f"aecontrol_gpu_demand_predicted_arrivals {gpu_demand.predicted_cuda_arrivals:.6f}",
+                "# HELP aecontrol_gpu_demand_capacity_ratio Projected GPU seconds divided by active worker capacity.",
+                "# TYPE aecontrol_gpu_demand_capacity_ratio gauge",
+                "# HELP aecontrol_gpu_demand_confidence Seasonal demand forecast confidence by fixed level.",
+                "# TYPE aecontrol_gpu_demand_confidence gauge",
+            ]
+        )
+        if gpu_demand.projected_capacity_ratio is not None:
+            lines.append(
+                f"aecontrol_gpu_demand_capacity_ratio {gpu_demand.projected_capacity_ratio:.6f}"
+            )
+        for level in ("unavailable", "low", "high"):
+            value = int(gpu_demand.confidence == level)
+            lines.append(f'aecontrol_gpu_demand_confidence{{level="{level}"}} {value}')
     lines.extend(
         [
             "# HELP aecontrol_gate_decisions Persisted gate decisions by outcome.",

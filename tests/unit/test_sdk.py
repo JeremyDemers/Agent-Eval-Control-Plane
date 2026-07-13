@@ -80,6 +80,28 @@ def capacity_payload() -> dict[str, Any]:
     }
 
 
+def demand_payload() -> dict[str, Any]:
+    return {
+        "observed_at": "2026-07-13T18:37:00Z",
+        "history_start": "2026-05-18T18:37:00Z",
+        "lookback_days": 56,
+        "horizon_hours": 24,
+        "historical_cuda_jobs": 24,
+        "observed_history_hours": 1344,
+        "current_queued_cuda_jobs": 2,
+        "current_running_cuda_jobs": 1,
+        "predicted_cuda_arrivals": 3.5,
+        "average_cuda_duration_seconds": 600,
+        "projected_gpu_seconds": 3900,
+        "available_gpu_seconds": 172800,
+        "projected_capacity_ratio": 0.022569,
+        "active_cuda_workers": 2,
+        "confidence": "high",
+        "saturation": "within_capacity",
+        "hours": [],
+    }
+
+
 def test_sync_client_serializes_and_waits_for_job() -> None:
     transport = FakeTransport()
     queued = job_payload(JobStatus.QUEUED)
@@ -140,6 +162,16 @@ def test_client_reads_gpu_capacity_forecast() -> None:
 
     assert forecast.first_wave_jobs == 2
     assert forecast.minimum_clearance_waves == 2
+
+
+def test_client_reads_gpu_demand_forecast() -> None:
+    transport = FakeTransport()
+    transport.add("GET", "/api/v1/capacity/gpu/demand", demand_payload())
+
+    forecast = AgentEvalClient(transport=transport).gpu_demand()
+
+    assert forecast.predicted_cuda_arrivals == 3.5
+    assert forecast.confidence == "high"
 
 
 def test_client_explains_job_placement() -> None:
@@ -348,12 +380,14 @@ async def test_async_client_health_and_collections() -> None:
     transport.add("GET", "/api/v1/runs", [])
     transport.add("GET", "/api/v1/comparisons", [])
     transport.add("GET", "/api/v1/capacity/gpu", capacity_payload())
+    transport.add("GET", "/api/v1/capacity/gpu/demand", demand_payload())
     client = AsyncAgentEvalClient(transport=transport)
 
     assert await client.health() == {"status": "ok"}
     assert await client.list_runs() == []
     assert await client.list_comparisons() == []
     assert (await client.gpu_capacity()).active_cuda_workers == 2
+    assert (await client.gpu_demand()).saturation == "within_capacity"
 
 
 @pytest.mark.asyncio

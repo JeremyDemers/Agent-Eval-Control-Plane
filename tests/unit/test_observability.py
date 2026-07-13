@@ -4,6 +4,7 @@ from aecontrol.database import DatabasePoolSnapshot
 from aecontrol.guardrails import GuardrailEfficacyMetrics, GuardrailEfficacyReport
 from aecontrol.models import (
     GpuCapacityForecast,
+    GpuDemandForecast,
     GpuDevice,
     GpuDurationEstimate,
     OperationalSnapshot,
@@ -109,7 +110,26 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
         ],
     )
     pool = DatabasePoolSnapshot(minimum=1, maximum=8, size=3, available=2, waiting=1)
-    payload = render_prometheus(snapshot, [worker], capacity, efficacy, pool)
+    demand = GpuDemandForecast(
+        observed_at=utc_now(),
+        history_start=datetime(2026, 5, 18, tzinfo=UTC),
+        lookback_days=56,
+        horizon_hours=24,
+        historical_cuda_jobs=24,
+        observed_history_hours=1344,
+        current_queued_cuda_jobs=2,
+        current_running_cuda_jobs=1,
+        predicted_cuda_arrivals=3.5,
+        average_cuda_duration_seconds=600,
+        projected_gpu_seconds=3900,
+        available_gpu_seconds=86400,
+        projected_capacity_ratio=0.045139,
+        active_cuda_workers=1,
+        confidence="high",
+        saturation="within_capacity",
+        hours=[],
+    )
+    payload = render_prometheus(snapshot, [worker], capacity, efficacy, pool, demand)
 
     assert "aecontrol_runs_total 3" in payload
     assert "aecontrol_guardrail_evidence_total 4" in payload
@@ -147,3 +167,7 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
     assert 'aecontrol_database_pool_connections{state="available"} 2' in payload
     assert 'aecontrol_database_pool_limit{bound="maximum"} 8' in payload
     assert "aecontrol_database_pool_waiting_requests 1" in payload
+    assert "aecontrol_gpu_demand_predicted_arrivals 3.500000" in payload
+    assert "aecontrol_gpu_demand_capacity_ratio 0.045139" in payload
+    assert 'aecontrol_gpu_demand_confidence{level="high"} 1' in payload
+    assert 'aecontrol_gpu_demand_confidence{level="low"} 0' in payload

@@ -19,6 +19,7 @@ from psycopg_pool import ConnectionPool
 
 from aecontrol.capacity import forecast_gpu_capacity
 from aecontrol.database import DatabasePoolSnapshot, DatabaseRuntimeConfiguration
+from aecontrol.demand import DEFAULT_LOOKBACK_DAYS, forecast_gpu_demand
 from aecontrol.guardrails import (
     GuardrailConfigActivation,
     GuardrailConfigVersion,
@@ -41,6 +42,7 @@ from aecontrol.models import (
     EvaluationJob,
     EvaluationRun,
     GpuCapacityForecast,
+    GpuDemandForecast,
     GpuDurationEstimate,
     JobPlacementDiagnostic,
     JobStatus,
@@ -53,7 +55,7 @@ from aecontrol.models import (
     WorkerCapabilities,
     WorkerRecord,
 )
-from aecontrol.placement import diagnose_placement
+from aecontrol.placement import DEFAULT_WORKER_ACTIVE_SECONDS, diagnose_placement
 
 SCHEMA_VERSION = 11
 
@@ -1138,6 +1140,62 @@ class ArtifactStore:
                 """
             ).fetchall()
         return [GpuDurationEstimate.model_validate(row) for row in rows]
+
+    def gpu_demand_forecast(
+        self,
+        workers: list[WorkerRecord] | None = None,
+        *,
+        now: datetime | None = None,
+    ) -> GpuDemandForecast:
+        self.initialize()
+        observed_at = now or datetime.now(UTC)
+        lookback_start = observed_at - timedelta(days=DEFAULT_LOOKBACK_DAYS)
+        with self._connect() as connection:
+            inception = connection.execute(
+                sql.SQL("SELECT min(created_at) AS history_start FROM {}.evaluation_jobs").format(
+                    sql.Identifier(self.schema)
+                )
+            ).fetchone()
+            stored_start = cast(datetime | None, inception["history_start"] if inception else None)
+            history_start = max(stored_start or lookback_start, lookback_start)
+            rows = connection.execute(
+                sql.SQL(
+                    """SELECT date_trunc('hour', created_at) AS hour_start,
+                              count(*) AS arrivals
+                       FROM {}.evaluation_jobs
+                       WHERE required_accelerator = 'cuda'
+                         AND created_at >= %s AND created_at < %s
+                       GROUP BY hour_start ORDER BY hour_start"""
+                ).format(sql.Identifier(self.schema)),
+                (history_start, observed_at),
+            ).fetchall()
+            backlog = connection.execute(
+                sql.SQL(
+                    """SELECT count(*) FILTER (WHERE status = 'queued') AS queued,
+                              count(*) FILTER (WHERE status = 'running') AS running
+                       FROM {}.evaluation_jobs
+                       WHERE required_accelerator = 'cuda'
+                         AND status IN ('queued', 'running')"""
+                ).format(sql.Identifier(self.schema))
+            ).fetchone()
+        estimates = self._gpu_duration_estimates()
+        all_cuda = next((item for item in estimates if item.mig_profile is None), None)
+        worker_inventory = workers if workers is not None else self.list_workers()
+        active_after = observed_at - timedelta(seconds=DEFAULT_WORKER_ACTIVE_SECONDS)
+        active_cuda_workers = sum(
+            worker.last_seen_at >= active_after
+            and Accelerator.CUDA in worker.capabilities.accelerators
+            for worker in worker_inventory
+        )
+        return forecast_gpu_demand(
+            [(cast(datetime, row["hour_start"]), cast(int, row["arrivals"])) for row in rows],
+            history_start=history_start,
+            observed_at=observed_at,
+            current_queued_cuda_jobs=cast(int, backlog["queued"] if backlog else 0),
+            current_running_cuda_jobs=cast(int, backlog["running"] if backlog else 0),
+            active_cuda_workers=active_cuda_workers,
+            duration_estimate=all_cuda,
+        )
 
     def lease_job(
         self,

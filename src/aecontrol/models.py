@@ -455,6 +455,33 @@ class GpuCapacityForecast(BaseModel):
     jobs: list[GpuQueueJobForecast]
 
 
+class GpuDemandHour(BaseModel):
+    hour_start: datetime
+    historical_occurrences: int = Field(ge=0)
+    historical_arrivals: int = Field(ge=0)
+    predicted_arrivals: float = Field(ge=0)
+
+
+class GpuDemandForecast(BaseModel):
+    observed_at: datetime
+    history_start: datetime
+    lookback_days: int = Field(gt=0)
+    horizon_hours: int = Field(gt=0)
+    historical_cuda_jobs: int = Field(ge=0)
+    observed_history_hours: int = Field(ge=0)
+    current_queued_cuda_jobs: int = Field(ge=0)
+    current_running_cuda_jobs: int = Field(ge=0)
+    predicted_cuda_arrivals: float = Field(ge=0)
+    average_cuda_duration_seconds: float | None = Field(default=None, gt=0)
+    projected_gpu_seconds: float | None = Field(default=None, ge=0)
+    available_gpu_seconds: float = Field(ge=0)
+    projected_capacity_ratio: float | None = Field(default=None, ge=0)
+    active_cuda_workers: int = Field(ge=0)
+    confidence: Literal["unavailable", "low", "high"]
+    saturation: Literal["unavailable", "within_capacity", "at_risk", "over_capacity"]
+    hours: list[GpuDemandHour]
+
+
 class OperationalSnapshot(BaseModel):
     runs_total: int = Field(ge=0)
     comparisons_total: int = Field(ge=0)

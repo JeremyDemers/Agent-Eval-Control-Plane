@@ -7,6 +7,8 @@ AgentEval exposes local operational surfaces backed by PostgreSQL.
 - `/metrics` emits Prometheus text with bounded labels for job states and gate outcomes.
 - `/api/v1/capacity/gpu` forecasts the current CUDA queue against active worker capacity and reports
   sample-qualified historical p90 clearance estimates when every compatible request class has data.
+- `/api/v1/capacity/gpu/demand` projects 24-hour CUDA arrivals and GPU-second saturation from bounded
+  UTC hour-of-week history with explicit evidence confidence.
 
 The metrics include persisted run and comparison totals, jobs by lifecycle state, gate outcomes,
 registered and active workers, expired leases, oldest queued-job age, and average completed-job
@@ -21,6 +23,9 @@ clearance-wave count without job IDs, model names, or worker assignments as labe
 Historical duration gauges use only the bounded MIG profile request class plus fixed average/p90
 dimensions. The clearance ETA series is omitted when history is incomplete instead of exporting a
 sentinel or `NaN`.
+Seasonal demand metrics export only aggregate predicted arrivals, capacity ratio, and fixed confidence
+levels. Per-hour timestamps and arrival evidence remain available through the API but are excluded
+from Prometheus labels.
 When the in-process PostgreSQL pool is enabled, connection size, availability, configured bounds, and
 waiting requests are exported as low-cardinality gauges. Direct/PgBouncer mode omits those series.
 See [`database.md`](database.md) for sizing and migration-lock behavior.
