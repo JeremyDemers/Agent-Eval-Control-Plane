@@ -61,6 +61,7 @@
 - Tagged GHCR image publication with OCI provenance and SBOM attestations.
 - Queue-aware KEDA autoscaling for CPU and NVIDIA workers with failure fallbacks.
 - NVIDIA NIM runtime with secure hosted credentials, self-hosted management APIs, and worker placement.
+- NeMo Guardrails validation evidence with exact intervention detection and activated-rail diagnostics.
 
 ## Verification
 
@@ -83,4 +84,4 @@
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
-- Kubernetes database/operator integration, hardened worker isolation, additional hosted providers, multi-tenancy, LangGraph, and NeMo remain on the roadmap.
+- Kubernetes database/operator integration, hardened worker isolation, additional hosted providers, multi-tenancy, LangGraph, and deeper NeMo configuration lifecycle support remain on the roadmap.

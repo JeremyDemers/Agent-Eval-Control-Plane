@@ -22,11 +22,12 @@ Implemented ahead of the original four-day scope:
 - Kubernetes API and CPU/NVIDIA worker deployment with GHCR release images
 - Queue-aware KEDA scaling for CPU and NVIDIA workers
 - First-class NVIDIA NIM runtime for hosted and self-hosted endpoints
+- Typed NeMo Guardrails input/output evidence and activated-rail diagnostics
 
 Next stages:
 
 - Pinned sandbox images with seccomp/AppArmor and microVM isolation
 - Production database/operator integration and predictive GPU capacity planning
 - Additional hosted provider authentication and endpoint-specific adapters
-- NeMo and LangGraph interoperability packages
+- Deeper NeMo configuration lifecycle and LangGraph interoperability packages
 - Multi-tenancy, signed immutable object storage, and external trace/metrics backends

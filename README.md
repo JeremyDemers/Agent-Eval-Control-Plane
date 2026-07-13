@@ -196,7 +196,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.19.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.20.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -277,6 +277,20 @@ uv run aecontrol nim models
 See [`docs/nvidia-nim.md`](docs/nvidia-nim.md) for hosted and self-hosted configuration, provenance,
 and credential boundaries.
 
+## NeMo Guardrails Evidence
+
+The typed NeMo Guardrails client discovers server configurations and checks agent input/output pairs
+with input and output rails only. Evidence records exact pass-through versus intervention, activated
+rails, and server statistics without relying on a provider-specific refusal phrase.
+
+```bash
+uv run aecontrol guardrails configs
+uv run aecontrol guardrails check --model meta/llama-3.1-8b-instruct \
+  --config content_safety --input "request" --output "agent response"
+```
+
+See [`docs/nemo-guardrails.md`](docs/nemo-guardrails.md) for evidence semantics and log sensitivity.
+
 ## Scoped API Authentication
 
 Production-style bearer authentication can be enabled without changing the zero-configuration local
@@ -308,7 +322,7 @@ Schema v4 backfills existing PostgreSQL artifacts and adds durable trace correla
 
 The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
 hardened isolation for untrusted code. Managed Kubernetes operators, additional hosted providers,
-object storage, NeMo/LangGraph adapters, and production observability remain in `docs/roadmap.md`.
+object storage, deeper NeMo/LangGraph adapters, and production observability remain in `docs/roadmap.md`.
 
 ## Project Governance
 

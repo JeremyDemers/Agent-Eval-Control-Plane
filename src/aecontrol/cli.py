@@ -21,6 +21,7 @@ from aecontrol.compare import compare_runs
 from aecontrol.datasets import validate_jsonl_dataset
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
+from aecontrol.guardrails import GuardrailsClient, GuardrailsError
 from aecontrol.hardware import detect_worker_capabilities
 from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, EvaluationRun, GateOutcome, JobStatus, RunComparison
@@ -40,6 +41,7 @@ jobs_app = typer.Typer(help="Durable evaluation job commands")
 ollama_app = typer.Typer(help="Ollama provider commands")
 openai_app = typer.Typer(help="OpenAI-compatible provider commands")
 nim_app = typer.Typer(help="NVIDIA NIM provider commands")
+guardrails_app = typer.Typer(help="NVIDIA NeMo Guardrails commands")
 auth_app = typer.Typer(help="API authentication commands")
 app.add_typer(datasets_app, name="datasets")
 app.add_typer(suites_app, name="suites")
@@ -50,6 +52,7 @@ app.add_typer(jobs_app, name="jobs")
 app.add_typer(ollama_app, name="ollama")
 app.add_typer(openai_app, name="openai")
 app.add_typer(nim_app, name="nim")
+app.add_typer(guardrails_app, name="guardrails")
 app.add_typer(auth_app, name="auth")
 console = Console()
 
@@ -486,6 +489,37 @@ def nim_metadata() -> None:
         console.print(f"[red]unavailable[/red] {error}")
         raise typer.Exit(1) from error
     console.print(json.dumps({"metadata": metadata, "version": deployment_version}, indent=2))
+
+
+@guardrails_app.command("configs")
+def guardrails_configs(json_output: bool = typer.Option(False, "--json")) -> None:
+    """List configurations exposed by a NeMo Guardrails server."""
+    try:
+        configs = asyncio.run(GuardrailsClient().configs())
+    except GuardrailsError as error:
+        console.print(f"[red]unavailable[/red] {error}")
+        raise typer.Exit(1) from error
+    if json_output:
+        console.print(json.dumps([config.model_dump() for config in configs], indent=2))
+        return
+    for config in configs:
+        console.print(config.id)
+
+
+@guardrails_app.command("check")
+def guardrails_check(
+    model: str = typer.Option(..., "--model"),
+    config_id: str = typer.Option(..., "--config"),
+    input_text: str = typer.Option(..., "--input"),
+    output_text: str | None = typer.Option(None, "--output"),
+) -> None:
+    """Check input or an input/output pair and emit structured rail evidence."""
+    try:
+        evidence = asyncio.run(GuardrailsClient().check(model, config_id, input_text, output_text))
+    except GuardrailsError as error:
+        console.print(f"[red]unavailable[/red] {error}")
+        raise typer.Exit(1) from error
+    console.print(evidence.model_dump_json(indent=2))
 
 
 @app.command()
