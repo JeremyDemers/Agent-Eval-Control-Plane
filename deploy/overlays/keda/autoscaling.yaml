@@ -32,8 +32,12 @@ spec:
       metadata:
         connectionFromEnv: DATABASE_URL
         query: >-
-          SELECT count(*) FROM evaluation_jobs
+          WITH tenant_context AS MATERIALIZED (
+            SELECT set_config('aecontrol.tenant_id', 'default', true) AS tenant_id
+          )
+          SELECT count(*) FROM evaluation_jobs CROSS JOIN tenant_context
           WHERE required_accelerator = 'cpu'
+            AND evaluation_jobs.tenant_id = tenant_context.tenant_id
             AND (status = 'queued' OR (status = 'running' AND lease_expires_at < now()))
         targetQueryValue: "4"
         activationTargetQueryValue: "0"
@@ -58,8 +62,12 @@ spec:
       metadata:
         connectionFromEnv: DATABASE_URL
         query: >-
-          SELECT count(*) FROM evaluation_jobs
+          WITH tenant_context AS MATERIALIZED (
+            SELECT set_config('aecontrol.tenant_id', 'default', true) AS tenant_id
+          )
+          SELECT count(*) FROM evaluation_jobs CROSS JOIN tenant_context
           WHERE required_accelerator = 'cuda'
+            AND evaluation_jobs.tenant_id = tenant_context.tenant_id
             AND (status = 'queued' OR (status = 'running' AND lease_expires_at < now()))
         targetQueryValue: "1"
         activationTargetQueryValue: "0"

@@ -158,6 +158,11 @@ available for PgBouncer and short-lived commands. Transaction-scoped advisory lo
 initialization across replicas. See [`docs/database.md`](docs/database.md) for TLS, sizing, migration,
 and saturation-monitoring guidance.
 
+API keys are permanently bound to tenant IDs. Schema v12 applies forced PostgreSQL row-level security
+to evidence, jobs, policy history, and worker inventory while transaction-local context remains safe
+across pooled connections. See [`docs/multi-tenancy.md`](docs/multi-tenancy.md) for worker topology,
+KEDA, migration, and database-role boundaries.
+
 Operational endpoints provide database health, queue-aware readiness, Prometheus-compatible metrics,
 correlated request timing, and W3C Trace Context propagation. Queued jobs persist their originating
 `traceparent` and request ID; workers continue the same trace after the PostgreSQL handoff.
@@ -257,7 +262,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.37.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.38.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -443,7 +448,7 @@ backend is not hardened isolation for untrusted code, while the stronger Podman 
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Automated
 restore drills, cross-region promotion, additional hosted providers, immutable evidence storage,
-and multi-tenancy remain in `docs/roadmap.md`.
+self-service tenant administration, and cross-tenant fleet analytics remain in `docs/roadmap.md`.
 
 ## Project Governance
 

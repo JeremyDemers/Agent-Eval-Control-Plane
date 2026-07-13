@@ -39,10 +39,11 @@ Implemented ahead of the original four-day scope:
 - Evidence-qualified UTC hour-of-week GPU demand and saturation forecasting
 - Three-instance CloudNativePG provisioning with synchronous quorum failover and opt-in monitoring
 - Barman Cloud WAL archiving, daily base backups, 30-day retention, PITR template, and backup alerts
+- API-key-bound tenants with forced PostgreSQL RLS across evidence, queues, policies, and workers
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
 - Automated scheduled restore drills and cross-region PostgreSQL replica promotion
 - Additional hosted provider authentication and endpoint-specific adapters
-- Multi-tenancy, immutable object storage, and KMS/asymmetric attestations
+- Self-service tenant lifecycle, immutable evidence storage, and KMS/asymmetric attestations

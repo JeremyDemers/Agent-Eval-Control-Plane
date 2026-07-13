@@ -19,9 +19,11 @@ Create `auth.yaml` with the printed SHA-256 digest:
 ```yaml
 keys:
   - key_id: automation
+    tenant_id: platform
     secret_sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     scopes: [read, write]
   - key_id: auditor
+    tenant_id: safety
     secret_sha256: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
     scopes: [read]
 ```
@@ -37,9 +39,14 @@ curl -H "Authorization: Bearer $AECONTROL_API_KEY" http://127.0.0.1:8000/api/v1/
 The typed synchronous and asynchronous SDK clients accept `api_key=` and also read
 `AECONTROL_API_KEY`, allowing the plaintext credential to remain in the deployment secret provider.
 
+Tenant identity is bound to the key configuration and cannot be selected through a request header.
+Authenticated responses include `X-AEControl-Tenant`; omitted tenant IDs use `default` for backward
+compatibility. See [`multi-tenancy.md`](multi-tenancy.md) for PostgreSQL RLS enforcement, worker
+binding, migration behavior, and the database-role trust boundary.
+
 `read` permits API queries, `write` permits evaluation, queue, cancellation, and comparison
-operations, and `admin` satisfies every scope. Guardrails configuration registration and activation
-specifically require `admin`; activation history and version inventory require `read`. Keys should be
-random and rotated through the
+operations, and `admin` satisfies every scope within the key's tenant. Guardrails configuration
+registration and activation specifically require `admin`; activation history and version inventory
+require `read`. Keys should be random and rotated through the
 deployment secret manager; the service stores only their digests in memory and never logs bearer
 credentials.

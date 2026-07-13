@@ -52,6 +52,19 @@ phase. The repository-owned PostgreSQL cluster uses trust authentication only on
 production deployment requires authenticated database connections, API authorization, request limits,
 and a dedicated hardened worker boundary.
 
+## Tenant Boundary
+
+Authenticated tenant identity comes only from the operator-owned API-key configuration. Schema v12
+enables and forces PostgreSQL row-level security on every tenant data table, sets identity locally in
+each transaction, and uses tenant-aware relational constraints. Request headers, paths, and payloads
+cannot select or override a tenant. Tenant admins remain scoped to their configured tenant.
+
+Production database roles must be non-superusers without `BYPASSRLS`; PostgreSQL superusers bypass
+row-level security even when it is forced. Database credentials, authentication configuration, and
+tenant-specific worker environments remain trusted operator assets. The browser and unauthenticated
+operational endpoints expose only the deployment's configured default tenant, not a global tenant
+inventory. See [`multi-tenancy.md`](multi-tenancy.md) for migration and deployment details.
+
 ## Repository Security
 
 `.github/workflows/security.yml` runs three independent controls:
@@ -61,7 +74,7 @@ and a dedicated hardened worker boundary.
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.37.0
+development-only tools so its result describes the shipped runtime environment. The v0.38.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults

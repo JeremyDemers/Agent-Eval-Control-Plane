@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -12,6 +12,8 @@ from fastapi import HTTPException, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
+from aecontrol.tenancy import DEFAULT_TENANT_ID, TENANT_ID_PATTERN, bind_tenant, default_tenant_id
+
 AuthScope = Literal["read", "write", "admin"]
 
 
@@ -19,6 +21,7 @@ class APIKey(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key_id: str = Field(min_length=1, max_length=64)
+    tenant_id: str = Field(default=DEFAULT_TENANT_ID, pattern=TENANT_ID_PATTERN)
     secret_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     scopes: set[AuthScope] = Field(min_length=1)
 
@@ -31,6 +34,7 @@ class AuthConfig(BaseModel):
 
 class Principal(BaseModel):
     key_id: str
+    tenant_id: str
     scopes: set[AuthScope]
 
 
@@ -70,15 +74,18 @@ class Authenticator:
     def enabled(self) -> bool:
         return self.config is not None
 
-    def require(self, scope: AuthScope) -> Callable[..., Principal]:
-        def authenticate(
+    def require(self, scope: AuthScope) -> Callable[..., Awaitable[Principal]]:
+        async def authenticate(
             request: Request,
             credentials: Annotated[
                 HTTPAuthorizationCredentials | None, Security(bearer_scheme)
             ] = None,
         ) -> Principal:
             if self.config is None:
-                principal = Principal(key_id="local-trust", scopes={"admin"})
+                principal = Principal(
+                    key_id="local-trust", tenant_id=default_tenant_id(), scopes={"admin"}
+                )
+                bind_tenant(principal.tenant_id)
                 request.state.principal = principal
                 return principal
             if credentials is None:
@@ -107,7 +114,8 @@ class Authenticator:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"API key requires the {scope} scope",
                 )
-            principal = Principal(key_id=key.key_id, scopes=key.scopes)
+            principal = Principal(key_id=key.key_id, tenant_id=key.tenant_id, scopes=key.scopes)
+            bind_tenant(principal.tenant_id)
             request.state.principal = principal
             return principal
 

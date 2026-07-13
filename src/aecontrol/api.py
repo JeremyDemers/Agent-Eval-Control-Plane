@@ -66,6 +66,7 @@ from aecontrol.telemetry import (
     record_http_response,
     shutdown_telemetry,
 )
+from aecontrol.tenancy import bind_tenant, default_tenant_id, reset_tenant
 from aecontrol.tracing import span
 
 DEFAULT_DATABASE_URL = "postgresql://aecontrol@127.0.0.1:55432/aecontrol"
@@ -177,6 +178,7 @@ def create_app(
 
     @application.middleware("http")
     async def request_context(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        tenant_token = bind_tenant(default_tenant_id())
         supplied_request_id = request.headers.get("x-request-id", "")
         request_id = (
             supplied_request_id
@@ -201,6 +203,9 @@ def create_app(
             response.headers["traceparent"] = request.state.traceparent
             duration_ms = (time.perf_counter() - started) * 1000
             response.headers["Server-Timing"] = f"app;dur={duration_ms:.2f}"
+            principal = getattr(request.state, "principal", None)
+            if principal is not None:
+                response.headers["X-AEControl-Tenant"] = principal.tenant_id
             return response
         finally:
             request_logger.info(
@@ -216,10 +221,16 @@ def create_app(
                         "principal": getattr(
                             getattr(request.state, "principal", None), "key_id", "anonymous"
                         ),
+                        "tenant_id": getattr(
+                            getattr(request.state, "principal", None),
+                            "tenant_id",
+                            default_tenant_id(),
+                        ),
                     },
                     separators=(",", ":"),
                 )
             )
+            reset_tenant(tenant_token)
 
     @application.get("/healthz", tags=["operations"])
     def health() -> dict[str, object]:

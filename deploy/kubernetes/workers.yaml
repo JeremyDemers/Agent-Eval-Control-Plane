@@ -32,6 +32,7 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: database-url}
+            - {name: AECONTROL_TENANT_ID, value: default}
             - name: NVIDIA_API_KEY
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: nvidia-api-key}
@@ -76,6 +77,7 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: database-url}
+            - {name: AECONTROL_TENANT_ID, value: default}
             - name: AECONTROL_DCGM_EXPORTER_URL
               value: http://nvidia-dcgm-exporter.gpu-operator.svc.cluster.local:9400/metrics
             - name: AECONTROL_ARTIFACT_SIGNING_KEY_ID

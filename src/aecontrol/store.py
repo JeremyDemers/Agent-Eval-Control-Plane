@@ -56,8 +56,18 @@ from aecontrol.models import (
     WorkerRecord,
 )
 from aecontrol.placement import DEFAULT_WORKER_ACTIVE_SECONDS, diagnose_placement
+from aecontrol.tenancy import current_tenant_id
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
+TENANT_TABLES = (
+    "evaluation_runs",
+    "comparisons",
+    "guardrail_evidence",
+    "guardrail_config_versions",
+    "guardrail_config_activations",
+    "evaluation_jobs",
+    "workers",
+)
 
 
 class ArtifactStore:
@@ -381,6 +391,7 @@ class ArtifactStore:
                 """
             )
             self._backfill_artifact_digests(connection)
+            self._enable_tenant_isolation(connection)
             connection.execute(
                 "ALTER TABLE evaluation_runs ALTER COLUMN payload_sha256 SET NOT NULL"
             )
@@ -392,7 +403,7 @@ class ArtifactStore:
                 )
                 return
             stored_version = cast(int, row["version"])
-            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
+            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif stored_version != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {stored_version}"
@@ -583,7 +594,8 @@ class ArtifactStore:
                     FROM guardrail_config_activations
                     ORDER BY config_id, activation_sequence DESC
                 )
-                SELECT versions.*,
+                SELECT versions.config_id, versions.version, versions.bundle_sha256,
+                       versions.description, versions.created_at, versions.created_by,
                        coalesce(latest.version = versions.version, false) AS active
                 FROM guardrail_config_versions AS versions
                 LEFT JOIN latest USING (config_id)
@@ -597,7 +609,9 @@ class ArtifactStore:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT versions.*, coalesce(latest.version = versions.version, false) AS active
+                SELECT versions.config_id, versions.version, versions.bundle_sha256,
+                       versions.description, versions.created_at, versions.created_by,
+                       coalesce(latest.version = versions.version, false) AS active
                 FROM guardrail_config_versions AS versions
                 LEFT JOIN LATERAL (
                     SELECT activation.version
@@ -1308,7 +1322,7 @@ class ArtifactStore:
                 """
                 INSERT INTO workers (worker_id, capabilities, registered_at, last_seen_at)
                 VALUES (%s, %s, now(), now())
-                ON CONFLICT(worker_id) DO UPDATE SET
+                ON CONFLICT(tenant_id, worker_id) DO UPDATE SET
                     capabilities = excluded.capabilities, last_seen_at = now()
                 RETURNING *
                 """,
@@ -1457,6 +1471,152 @@ class ArtifactStore:
             self.keyring.sign(artifact_type, artifact_id, payload_sha256),
         )
 
+    def _enable_tenant_isolation(self, connection: psycopg.Connection[dict[str, object]]) -> None:
+        for table in TENANT_TABLES:
+            identifier = sql.Identifier(table)
+            connection.execute(
+                sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS tenant_id TEXT").format(identifier)
+            )
+            connection.execute(
+                sql.SQL("UPDATE {} SET tenant_id = 'default' WHERE tenant_id IS NULL").format(
+                    identifier
+                )
+            )
+            connection.execute(
+                sql.SQL(
+                    "ALTER TABLE {} ALTER COLUMN tenant_id SET DEFAULT "
+                    "current_setting('aecontrol.tenant_id')"
+                ).format(identifier)
+            )
+            connection.execute(
+                sql.SQL("ALTER TABLE {} ALTER COLUMN tenant_id SET NOT NULL").format(identifier)
+            )
+            self._add_constraint_if_missing(
+                connection,
+                table,
+                f"{table}_tenant_id_check",
+                "CHECK (tenant_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$')",
+            )
+            connection.execute(
+                sql.SQL("ALTER TABLE {} ENABLE ROW LEVEL SECURITY").format(identifier)
+            )
+            connection.execute(
+                sql.SQL("ALTER TABLE {} FORCE ROW LEVEL SECURITY").format(identifier)
+            )
+            connection.execute(
+                sql.SQL("DROP POLICY IF EXISTS tenant_isolation ON {}").format(identifier)
+            )
+            connection.execute(
+                sql.SQL(
+                    "CREATE POLICY tenant_isolation ON {} "
+                    "USING (tenant_id = current_setting('aecontrol.tenant_id', true)) "
+                    "WITH CHECK (tenant_id = current_setting('aecontrol.tenant_id', true))"
+                ).format(identifier)
+            )
+            connection.execute(
+                sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} (tenant_id)").format(
+                    sql.Identifier(f"idx_{table}_tenant"), identifier
+                )
+            )
+
+        self._add_constraint_if_missing(
+            connection,
+            "evaluation_runs",
+            "evaluation_runs_tenant_run_key",
+            "UNIQUE (tenant_id, run_id)",
+        )
+        connection.execute(
+            "ALTER TABLE comparisons DROP CONSTRAINT IF EXISTS comparisons_baseline_run_id_fkey"
+        )
+        connection.execute(
+            "ALTER TABLE comparisons DROP CONSTRAINT IF EXISTS comparisons_candidate_run_id_fkey"
+        )
+        self._add_constraint_if_missing(
+            connection,
+            "comparisons",
+            "comparisons_tenant_baseline_run_fkey",
+            "FOREIGN KEY (tenant_id, baseline_run_id) "
+            "REFERENCES evaluation_runs(tenant_id, run_id)",
+        )
+        self._add_constraint_if_missing(
+            connection,
+            "comparisons",
+            "comparisons_tenant_candidate_run_fkey",
+            "FOREIGN KEY (tenant_id, candidate_run_id) "
+            "REFERENCES evaluation_runs(tenant_id, run_id)",
+        )
+        connection.execute(
+            "ALTER TABLE evaluation_jobs DROP CONSTRAINT IF EXISTS evaluation_jobs_run_id_fkey"
+        )
+        self._add_constraint_if_missing(
+            connection,
+            "evaluation_jobs",
+            "evaluation_jobs_tenant_run_fkey",
+            "FOREIGN KEY (tenant_id, run_id) REFERENCES evaluation_runs(tenant_id, run_id)",
+        )
+
+        connection.execute(
+            "ALTER TABLE guardrail_config_activations DROP CONSTRAINT IF EXISTS "
+            "guardrail_config_activations_config_id_version_fkey"
+        )
+        if self._constraint_exists(
+            connection, "guardrail_config_versions", "guardrail_config_versions_pkey"
+        ):
+            connection.execute(
+                "ALTER TABLE guardrail_config_versions "
+                "DROP CONSTRAINT guardrail_config_versions_pkey"
+            )
+        self._add_constraint_if_missing(
+            connection,
+            "guardrail_config_versions",
+            "guardrail_config_versions_tenant_pkey",
+            "PRIMARY KEY (tenant_id, config_id, version)",
+        )
+        self._add_constraint_if_missing(
+            connection,
+            "guardrail_config_activations",
+            "guardrail_config_activations_tenant_version_fkey",
+            "FOREIGN KEY (tenant_id, config_id, version) "
+            "REFERENCES guardrail_config_versions(tenant_id, config_id, version)",
+        )
+
+        if self._constraint_exists(connection, "workers", "workers_pkey"):
+            connection.execute("ALTER TABLE workers DROP CONSTRAINT workers_pkey")
+        self._add_constraint_if_missing(
+            connection,
+            "workers",
+            "workers_tenant_pkey",
+            "PRIMARY KEY (tenant_id, worker_id)",
+        )
+
+    @staticmethod
+    def _constraint_exists(
+        connection: psycopg.Connection[dict[str, object]], table: str, name: str
+    ) -> bool:
+        return (
+            connection.execute(
+                """SELECT 1 FROM pg_constraint
+                   WHERE conrelid = %s::regclass AND conname = %s""",
+                (table, name),
+            ).fetchone()
+            is not None
+        )
+
+    def _add_constraint_if_missing(
+        self,
+        connection: psycopg.Connection[dict[str, object]],
+        table: str,
+        name: str,
+        definition: str,
+    ) -> None:
+        if self._constraint_exists(connection, table, name):
+            return
+        connection.execute(
+            sql.SQL("ALTER TABLE {} ADD CONSTRAINT {} {}").format(
+                sql.Identifier(table), sql.Identifier(name), sql.SQL(definition)
+            )
+        )
+
     @staticmethod
     def _backfill_artifact_digests(
         connection: psycopg.Connection[dict[str, object]],
@@ -1482,10 +1642,12 @@ class ArtifactStore:
     def _connect(self) -> Iterator[psycopg.Connection[dict[str, object]]]:
         if self._pool is not None:
             with self._pool.connection() as connection:
+                self._set_tenant_context(connection)
                 yield connection
             return
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             self._set_search_path(connection)
+            self._set_tenant_context(connection)
             yield connection
 
     def _configure_pool_connection(self, connection: psycopg.Connection[dict[str, object]]) -> None:
@@ -1498,3 +1660,10 @@ class ArtifactStore:
 
     def _set_search_path(self, connection: psycopg.Connection[object]) -> None:
         connection.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(self.schema)))
+
+    @staticmethod
+    def _set_tenant_context(connection: psycopg.Connection[object]) -> None:
+        connection.execute(
+            "SELECT set_config('aecontrol.tenant_id', %s, true)",
+            (current_tenant_id(),),
+        )
