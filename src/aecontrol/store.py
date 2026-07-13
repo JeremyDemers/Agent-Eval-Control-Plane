@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import re
 from threading import Lock
 from typing import Literal, cast
@@ -15,7 +16,12 @@ from aecontrol.guardrails import (
     StoredGuardrailEvidence,
     StoredGuardrailEvidenceSummary,
 )
-from aecontrol.integrity import ArtifactIntegrityError, artifact_digest
+from aecontrol.integrity import (
+    ArtifactAuthenticityError,
+    ArtifactIntegrityError,
+    ArtifactKeyring,
+    artifact_digest,
+)
 from aecontrol.models import (
     Accelerator,
     ArtifactIntegrityItem,
@@ -35,18 +41,24 @@ from aecontrol.models import (
 )
 from aecontrol.placement import diagnose_placement
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class ArtifactStore:
     """PostgreSQL storage for complete evaluation and comparison artifacts."""
 
-    def __init__(self, database_url: str, schema: str = "public") -> None:
+    def __init__(
+        self,
+        database_url: str,
+        schema: str = "public",
+        keyring: ArtifactKeyring | None = None,
+    ) -> None:
         if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", schema):
             msg = f"invalid PostgreSQL schema name: {schema}"
             raise ValueError(msg)
         self.database_url = database_url
         self.schema = schema
+        self.keyring = keyring if keyring is not None else ArtifactKeyring.from_environment()
         self._initialized = False
         self._initialize_lock = Lock()
 
@@ -93,6 +105,12 @@ class ArtifactStore:
                 "ALTER TABLE evaluation_runs ADD COLUMN IF NOT EXISTS payload_sha256 TEXT"
             )
             connection.execute(
+                "ALTER TABLE evaluation_runs ADD COLUMN IF NOT EXISTS signature_hmac_sha256 TEXT"
+            )
+            connection.execute(
+                "ALTER TABLE evaluation_runs ADD COLUMN IF NOT EXISTS signature_key_id TEXT"
+            )
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS comparisons (
                     comparison_id UUID PRIMARY KEY,
@@ -114,6 +132,12 @@ class ArtifactStore:
                 "ALTER TABLE comparisons ADD COLUMN IF NOT EXISTS payload_sha256 TEXT"
             )
             connection.execute(
+                "ALTER TABLE comparisons ADD COLUMN IF NOT EXISTS signature_hmac_sha256 TEXT"
+            )
+            connection.execute(
+                "ALTER TABLE comparisons ADD COLUMN IF NOT EXISTS signature_key_id TEXT"
+            )
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS guardrail_evidence (
                     evidence_id UUID PRIMARY KEY,
@@ -133,6 +157,13 @@ class ArtifactStore:
             connection.execute(
                 """CREATE INDEX IF NOT EXISTS idx_guardrail_evidence_config
                    ON guardrail_evidence(config_id, created_at DESC)"""
+            )
+            connection.execute(
+                """ALTER TABLE guardrail_evidence ADD COLUMN IF NOT EXISTS
+                   signature_hmac_sha256 TEXT"""
+            )
+            connection.execute(
+                "ALTER TABLE guardrail_evidence ADD COLUMN IF NOT EXISTS signature_key_id TEXT"
             )
             connection.execute(
                 """
@@ -210,7 +241,7 @@ class ArtifactStore:
                 connection.execute(
                     "INSERT INTO schema_metadata(version) VALUES (%s)", (SCHEMA_VERSION,)
                 )
-            elif int(row["version"]) in {1, 2, 3, 4, 5}:
+            elif int(row["version"]) in {1, 2, 3, 4, 5, 6}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif int(row["version"]) != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {row['version']}"
@@ -223,13 +254,15 @@ class ArtifactStore:
         hidden_pass_rate = hidden_passes / case_count if case_count else 0.0
         payload = run.model_dump(mode="json")
         digest = artifact_digest(payload)
+        signature_key_id, signature = self._sign_artifact("run", run.run_id, digest)
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO evaluation_runs (
                     run_id, suite_name, dataset_name, dataset_version, agent_version,
-                    started_at, completed_at, case_count, hidden_pass_rate, payload, payload_sha256
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    started_at, completed_at, case_count, hidden_pass_rate, payload, payload_sha256,
+                    signature_key_id, signature_hmac_sha256
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(run_id) DO UPDATE SET
                     suite_name = excluded.suite_name,
                     dataset_name = excluded.dataset_name,
@@ -240,7 +273,9 @@ class ArtifactStore:
                     case_count = excluded.case_count,
                     hidden_pass_rate = excluded.hidden_pass_rate,
                     payload = excluded.payload,
-                    payload_sha256 = excluded.payload_sha256
+                    payload_sha256 = excluded.payload_sha256,
+                    signature_key_id = excluded.signature_key_id,
+                    signature_hmac_sha256 = excluded.signature_hmac_sha256
                 """,
                 (
                     run.run_id,
@@ -254,6 +289,8 @@ class ArtifactStore:
                     hidden_pass_rate,
                     Jsonb(payload),
                     digest,
+                    signature_key_id,
+                    signature,
                 ),
             )
 
@@ -261,11 +298,20 @@ class ArtifactStore:
         self.initialize()
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT payload, payload_sha256 FROM evaluation_runs WHERE run_id = %s", (run_id,)
+                """SELECT payload, payload_sha256, signature_key_id, signature_hmac_sha256
+                   FROM evaluation_runs WHERE run_id = %s""",
+                (run_id,),
             ).fetchone()
         if row is None:
             raise KeyError(str(run_id))
-        self._verify_artifact("run", run_id, row["payload_sha256"], row["payload"])
+        self._verify_artifact(
+            "run",
+            run_id,
+            row["payload_sha256"],
+            row["payload"],
+            row["signature_key_id"],
+            row["signature_hmac_sha256"],
+        )
         return EvaluationRun.model_validate(row["payload"])
 
     def list_runs(self, limit: int = 100) -> list[StoredRunSummary]:
@@ -288,13 +334,17 @@ class ArtifactStore:
         artifact = StoredComparison(comparison=comparison, decision=decision)
         payload = artifact.model_dump(mode="json")
         digest = artifact_digest(payload)
+        signature_key_id, signature = self._sign_artifact(
+            "comparison", artifact.comparison_id, digest
+        )
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO comparisons (
                     comparison_id, baseline_run_id, candidate_run_id, created_at,
-                    outcome, paired_cases, aggregate_pass_rate_delta, payload, payload_sha256
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    outcome, paired_cases, aggregate_pass_rate_delta, payload, payload_sha256,
+                    signature_key_id, signature_hmac_sha256
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     artifact.comparison_id,
@@ -306,6 +356,8 @@ class ArtifactStore:
                     comparison.aggregate_pass_rate_delta,
                     Jsonb(payload),
                     digest,
+                    signature_key_id,
+                    signature,
                 ),
             )
         return artifact
@@ -314,12 +366,20 @@ class ArtifactStore:
         self.initialize()
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT payload, payload_sha256 FROM comparisons WHERE comparison_id = %s",
+                """SELECT payload, payload_sha256, signature_key_id, signature_hmac_sha256
+                   FROM comparisons WHERE comparison_id = %s""",
                 (comparison_id,),
             ).fetchone()
         if row is None:
             raise KeyError(str(comparison_id))
-        self._verify_artifact("comparison", comparison_id, row["payload_sha256"], row["payload"])
+        self._verify_artifact(
+            "comparison",
+            comparison_id,
+            row["payload_sha256"],
+            row["payload"],
+            row["signature_key_id"],
+            row["signature_hmac_sha256"],
+        )
         return StoredComparison.model_validate(row["payload"])
 
     def save_guardrail_evidence(self, evidence: GuardrailEvidence) -> StoredGuardrailEvidence:
@@ -327,13 +387,16 @@ class ArtifactStore:
         artifact = StoredGuardrailEvidence(evidence=evidence)
         payload = artifact.model_dump(mode="json")
         digest = artifact_digest(payload)
+        signature_key_id, signature = self._sign_artifact(
+            "guardrail_evidence", artifact.evidence_id, digest
+        )
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO guardrail_evidence (
                     evidence_id, created_at, config_id, model, passed_through,
-                    payload, payload_sha256
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    payload, payload_sha256, signature_key_id, signature_hmac_sha256
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     artifact.evidence_id,
@@ -343,6 +406,8 @@ class ArtifactStore:
                     evidence.passed_through,
                     Jsonb(payload),
                     digest,
+                    signature_key_id,
+                    signature,
                 ),
             )
         return artifact
@@ -351,13 +416,19 @@ class ArtifactStore:
         self.initialize()
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT payload, payload_sha256 FROM guardrail_evidence WHERE evidence_id = %s",
+                """SELECT payload, payload_sha256, signature_key_id, signature_hmac_sha256
+                   FROM guardrail_evidence WHERE evidence_id = %s""",
                 (evidence_id,),
             ).fetchone()
         if row is None:
             raise KeyError(str(evidence_id))
         self._verify_artifact(
-            "guardrail_evidence", evidence_id, row["payload_sha256"], row["payload"]
+            "guardrail_evidence",
+            evidence_id,
+            row["payload_sha256"],
+            row["payload"],
+            row["signature_key_id"],
+            row["signature_hmac_sha256"],
         )
         return StoredGuardrailEvidence.model_validate(row["payload"])
 
@@ -377,6 +448,8 @@ class ArtifactStore:
         self.initialize()
         failures: list[ArtifactIntegrityItem] = []
         checked = 0
+        signed = 0
+        unsigned = 0
         with self._connect() as connection:
             sources: tuple[
                 tuple[str, str, Literal["run", "comparison", "guardrail_evidence"]], ...
@@ -387,26 +460,62 @@ class ArtifactStore:
             )
             for table, id_column, artifact_type in sources:
                 rows = connection.execute(
-                    sql.SQL("SELECT {}, payload, payload_sha256 FROM {}").format(
-                        sql.Identifier(id_column), sql.Identifier(table)
-                    )
+                    sql.SQL(
+                        "SELECT {}, payload, payload_sha256, signature_key_id, "
+                        "signature_hmac_sha256 FROM {}"
+                    ).format(sql.Identifier(id_column), sql.Identifier(table))
                 ).fetchall()
                 checked += len(rows)
                 for row in rows:
+                    artifact_id = cast(UUID, row[id_column])
                     actual = artifact_digest(row["payload"])
                     expected = str(row["payload_sha256"])
-                    if actual != expected:
+                    signature_key_id = row["signature_key_id"]
+                    signature = row["signature_hmac_sha256"]
+                    is_signed = signature_key_id is not None or signature is not None
+                    signed += int(is_signed)
+                    unsigned += int(not is_signed)
+                    if not hmac.compare_digest(actual, expected):
                         failures.append(
                             ArtifactIntegrityItem(
                                 artifact_type=artifact_type,
-                                artifact_id=cast(UUID, row[id_column]),
+                                artifact_id=artifact_id,
                                 valid=False,
                                 expected_sha256=expected,
                                 actual_sha256=actual,
                             )
                         )
+                        continue
+                    try:
+                        self._verify_authenticity(
+                            artifact_type,
+                            artifact_id,
+                            expected,
+                            signature_key_id,
+                            signature,
+                        )
+                    except ArtifactAuthenticityError as error:
+                        failures.append(
+                            ArtifactIntegrityItem(
+                                artifact_type=artifact_type,
+                                artifact_id=artifact_id,
+                                valid=False,
+                                expected_sha256=expected,
+                                actual_sha256=actual,
+                                failure_kind=(
+                                    "missing_signing_key"
+                                    if error.reason == "missing_signing_key"
+                                    else "signature"
+                                ),
+                                signing_key_id=error.signing_key_id,
+                            )
+                        )
         return ArtifactIntegrityReport(
-            checked=checked, valid=checked - len(failures), failures=failures
+            checked=checked,
+            valid=checked - len(failures),
+            signed=signed,
+            unsigned=unsigned,
+            failures=failures,
         )
 
     def list_comparisons(self, limit: int = 100) -> list[StoredComparisonSummary]:
@@ -801,17 +910,64 @@ class ArtifactStore:
             raise RuntimeError(msg)
         return EvaluationJob.model_validate(row)
 
-    @staticmethod
     def _verify_artifact(
+        self,
         artifact_type: str,
         artifact_id: UUID,
         expected_value: object,
         payload: object,
+        signing_key_id: object,
+        signature: object,
     ) -> None:
         expected = str(expected_value)
         actual = artifact_digest(payload)
-        if actual != expected:
+        if not hmac.compare_digest(actual, expected):
             raise ArtifactIntegrityError(artifact_type, artifact_id, expected, actual)
+        self._verify_authenticity(artifact_type, artifact_id, expected, signing_key_id, signature)
+
+    def _verify_authenticity(
+        self,
+        artifact_type: str,
+        artifact_id: UUID,
+        payload_sha256: str,
+        signing_key_id_value: object,
+        signature_value: object,
+    ) -> None:
+        if signing_key_id_value is None and signature_value is None:
+            return
+        signing_key_id = str(signing_key_id_value) if signing_key_id_value is not None else None
+        if signing_key_id is None or signature_value is None:
+            raise ArtifactAuthenticityError(
+                artifact_type, artifact_id, signing_key_id, "incomplete_signature"
+            )
+        if self.keyring is None:
+            raise ArtifactAuthenticityError(
+                artifact_type, artifact_id, signing_key_id, "missing_signing_key"
+            )
+        try:
+            valid = self.keyring.verify(
+                signing_key_id,
+                artifact_type,
+                artifact_id,
+                payload_sha256,
+                str(signature_value),
+            )
+        except KeyError as error:
+            raise ArtifactAuthenticityError(
+                artifact_type, artifact_id, signing_key_id, "missing_signing_key"
+            ) from error
+        if not valid:
+            raise ArtifactAuthenticityError(artifact_type, artifact_id, signing_key_id, "signature")
+
+    def _sign_artifact(
+        self, artifact_type: str, artifact_id: UUID, payload_sha256: str
+    ) -> tuple[str | None, str | None]:
+        if self.keyring is None:
+            return None, None
+        return (
+            self.keyring.active_key_id,
+            self.keyring.sign(artifact_type, artifact_id, payload_sha256),
+        )
 
     @staticmethod
     def _backfill_artifact_digests(

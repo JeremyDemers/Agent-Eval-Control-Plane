@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -182,3 +183,10 @@ def test_auth_cli_hashes_and_validates_configuration(tmp_path: Path) -> None:
     empty = runner.invoke(app, ["auth", "hash-key", "--secret", ""])
     assert empty.exit_code == 2
     assert "must not be empty" in empty.output
+
+
+def test_store_cli_generates_a_256_bit_signing_key() -> None:
+    result = CliRunner().invoke(app, ["store", "generate-signing-key"])
+
+    assert result.exit_code == 0
+    assert len(base64.b64decode(result.output.strip(), validate=True)) == 32

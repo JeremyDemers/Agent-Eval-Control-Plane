@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import getpass
 import json
 import os
+import secrets
 import shutil
 import socket
 import sys
@@ -245,11 +247,22 @@ def store_verify(
     if json_output:
         console.print(report.model_dump_json(indent=2))
     else:
-        console.print(f"artifact integrity: {report.valid}/{report.checked} valid")
+        console.print(
+            f"artifact verification: {report.valid}/{report.checked} valid "
+            f"({report.signed} signed, {report.unsigned} unsigned)"
+        )
         for failure in report.failures:
-            console.print(f"- {failure.artifact_type} {failure.artifact_id}: SHA-256 mismatch")
+            console.print(
+                f"- {failure.artifact_type} {failure.artifact_id}: {failure.failure_kind} failure"
+            )
     if report.failures:
         raise typer.Exit(1)
+
+
+@store_app.command("generate-signing-key")
+def store_generate_signing_key() -> None:
+    """Generate a base64-encoded 256-bit artifact signing key."""
+    console.print(base64.b64encode(secrets.token_bytes(32)).decode("ascii"))
 
 
 @store_app.command("compare")

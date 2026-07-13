@@ -25,6 +25,7 @@ Implemented ahead of the original four-day scope:
 - First-class NVIDIA NIM runtime for hosted and self-hosted endpoints
 - Durable, tamper-evident NeMo Guardrails checks across REST and sync/async SDKs
 - Browser Guardrails evidence explorer and low-cardinality safety metrics
+- Rotation-aware HMAC-SHA256 authenticity for persisted evaluation evidence
 
 Next stages:
 
@@ -32,4 +33,4 @@ Next stages:
 - Production database/operator integration and predictive GPU capacity planning
 - Additional hosted provider authentication and endpoint-specific adapters
 - Deeper NeMo configuration lifecycle and LangGraph interoperability packages
-- Multi-tenancy, signed immutable object storage, and external trace/metrics backends
+- Multi-tenancy, immutable object storage, KMS/asymmetric attestations, and external telemetry backends

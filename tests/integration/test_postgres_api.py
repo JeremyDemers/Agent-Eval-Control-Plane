@@ -13,6 +13,7 @@ from psycopg import sql
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key
 from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig, GuardrailsError
+from aecontrol.integrity import ArtifactKeyring
 from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, GpuDevice, JobStatus, WorkerCapabilities
 from aecontrol.store import ArtifactStore
@@ -49,7 +50,7 @@ def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 6
+        assert store.health()["schema_version"] == 7
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -117,7 +118,7 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 6
+    assert health.json()["schema_version"] == 7
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")
@@ -183,7 +184,13 @@ def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) 
 
     integrity = api_client.get("/api/v1/integrity")
     assert integrity.status_code == 200
-    assert integrity.json() == {"checked": 3, "valid": 3, "failures": []}
+    assert integrity.json() == {
+        "checked": 3,
+        "valid": 3,
+        "signed": 0,
+        "unsigned": 3,
+        "failures": [],
+    }
 
 
 def test_tampered_artifact_is_reported_and_blocked(api_client: TestClient) -> None:
@@ -217,6 +224,96 @@ def test_tampered_artifact_is_reported_and_blocked(api_client: TestClient) -> No
     blocked = api_client.get(f"/api/v1/runs/{run_id}")
     assert blocked.status_code == 409
     assert "failed SHA-256 integrity verification" in blocked.json()["detail"]
+
+
+def test_signed_artifacts_support_rotation_and_fail_closed(database_url: str) -> None:
+    schema = f"test_{uuid4().hex}"
+    old_keyring = ArtifactKeyring({"old": b"o" * 32}, "old")
+    rotated_keyring = ArtifactKeyring({"old": b"o" * 32, "new": b"n" * 32}, "new")
+    try:
+        with TestClient(
+            create_app(database_url, schema=schema, artifact_keyring=old_keyring)
+        ) as client:
+            old = client.post(
+                "/api/v1/evaluations",
+                json={
+                    "suite_path": "examples/suites/coding_repair.yaml",
+                    "agent_version": "baseline",
+                },
+            )
+            assert old.status_code == 201
+            old_run_id = old.json()["run_id"]
+            report = client.get("/api/v1/integrity").json()
+            assert report["signed"] == 1
+            assert report["unsigned"] == 0
+            assert report["valid"] == 1
+
+        with TestClient(
+            create_app(database_url, schema=schema, artifact_keyring=rotated_keyring)
+        ) as client:
+            assert client.get(f"/api/v1/runs/{old_run_id}").status_code == 200
+            new = client.post(
+                "/api/v1/evaluations",
+                json={
+                    "suite_path": "examples/suites/coding_repair.yaml",
+                    "agent_version": "candidate_fixed",
+                },
+            )
+            assert new.status_code == 201
+            new_run_id = new.json()["run_id"]
+            report = client.get("/api/v1/integrity").json()
+            assert report["signed"] == 2
+            assert report["unsigned"] == 0
+            assert report["valid"] == 2
+
+        with psycopg.connect(database_url) as connection:
+            rows = connection.execute(
+                sql.SQL(
+                    "SELECT run_id, signature_key_id, signature_hmac_sha256 "
+                    "FROM {}.evaluation_runs ORDER BY completed_at"
+                ).format(sql.Identifier(schema))
+            ).fetchall()
+        assert [(str(row[0]), row[1]) for row in rows] == [
+            (old_run_id, "old"),
+            (new_run_id, "new"),
+        ]
+        assert all(len(row[2]) == 64 for row in rows)
+        assert all(row[2] not in {"o" * 32, "n" * 32} for row in rows)
+
+        missing_old_keyring = ArtifactKeyring({"new": b"n" * 32}, "new")
+        with TestClient(
+            create_app(database_url, schema=schema, artifact_keyring=missing_old_keyring)
+        ) as client:
+            blocked = client.get(f"/api/v1/runs/{old_run_id}")
+            assert blocked.status_code == 409
+            assert "requires unavailable artifact signing key 'old'" in blocked.json()["detail"]
+            report = client.get("/api/v1/integrity").json()
+            assert report["valid"] == 1
+            assert report["failures"][0]["failure_kind"] == "missing_signing_key"
+            assert report["failures"][0]["signing_key_id"] == "old"
+
+        with psycopg.connect(database_url) as connection:
+            connection.execute(
+                sql.SQL(
+                    "UPDATE {}.evaluation_runs SET signature_hmac_sha256 = %s WHERE run_id = %s"
+                ).format(sql.Identifier(schema)),
+                ("0" * 64, new_run_id),
+            )
+        with TestClient(
+            create_app(database_url, schema=schema, artifact_keyring=rotated_keyring)
+        ) as client:
+            blocked = client.get(f"/api/v1/runs/{new_run_id}")
+            assert blocked.status_code == 409
+            assert "failed HMAC-SHA256 authenticity verification" in blocked.json()["detail"]
+            report = client.get("/api/v1/integrity").json()
+            assert report["valid"] == 1
+            assert report["failures"][0]["failure_kind"] == "signature"
+            assert report["failures"][0]["signing_key_id"] == "new"
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
 
 
 def test_guardrail_checks_become_tamper_evident_artifacts(
@@ -288,7 +385,13 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
     assert "content safety check output" in detail.text
 
     integrity = api_client.get("/api/v1/integrity")
-    assert integrity.json() == {"checked": 1, "valid": 1, "failures": []}
+    assert integrity.json() == {
+        "checked": 1,
+        "valid": 1,
+        "signed": 0,
+        "unsigned": 1,
+        "failures": [],
+    }
 
     store: ArtifactStore = api_client.app.state.store
     with psycopg.connect(store.database_url) as connection:
