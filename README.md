@@ -201,7 +201,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.22.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.23.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -299,6 +299,12 @@ curl -X POST http://127.0.0.1:8000/api/v1/guardrails/check \
   -H 'Content-Type: application/json' \
   -d '{"model":"meta/llama-3.1-8b-instruct","config_id":"content_safety","input_text":"request","output_text":"agent response"}'
 ```
+
+The browser explorer summarizes safety-check volume and intervention rate, links recent evidence to
+escaped detail views, and refuses to render records that fail digest verification. Prometheus exports
+low-cardinality check and intervention totals without model names, prompts, or evidence IDs.
+
+![NeMo Guardrails intervention evidence with activated rails and server statistics](docs/assets/guardrail-evidence.png)
 
 See [`docs/nemo-guardrails.md`](docs/nemo-guardrails.md) for evidence semantics and log sensitivity.
 

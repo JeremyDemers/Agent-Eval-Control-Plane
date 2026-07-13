@@ -32,6 +32,11 @@ curl http://127.0.0.1:8000/api/v1/guardrails/evidence
 curl http://127.0.0.1:8000/api/v1/guardrails/evidence/EVIDENCE_ID
 ```
 
+The browser dashboard includes total checks, intervention rate, and the ten most recent evidence
+records. `/guardrails/evidence/EVIDENCE_ID` renders the submitted text, guardrailed response,
+activated rails, and server statistics. Dynamic values are HTML-escaped, and the detail route uses the
+same digest verification as the REST API before returning content.
+
 When API authentication is enabled, configuration discovery and evidence retrieval require `read`;
 executing and storing a check requires `write`. The synchronous and asynchronous Python SDKs expose
 `guardrail_configs`, `check_guardrails`, `list_guardrail_evidence`, and
@@ -46,6 +51,10 @@ Schema v5 stores the complete typed envelope as JSONB alongside queryable config
 pass-through, and timestamp columns. The canonical payload digest is included in the full
 `/api/v1/integrity` audit. Detail reads return HTTP 409 without returning the untrusted payload when
 the digest does not match.
+
+`/metrics` exports `aecontrol_guardrail_evidence_total` and
+`aecontrol_guardrail_interventions_total`. These gauges deliberately omit configuration, model,
+prompt, and evidence labels to avoid sensitive or high-cardinality telemetry.
 
 `NEMO_GUARDRAILS_API_KEY` adds an optional bearer credential. The key is transport-only and does not
 appear in evidence. Protocol tests use an in-process server double, keeping CI deterministic and free

@@ -8,6 +8,8 @@ The evaluation engine loads a versioned JSONL dataset, invokes a runtime adapter
 deterministic evaluators, then emits immutable run artifacts. PostgreSQL stores the complete Pydantic
 contracts as JSONB while indexing identity, version, timestamps, pass rate, gate outcome, and aggregate
 delta for control-plane queries. A schema metadata table rejects unsupported storage versions.
+NeMo Guardrails checks use the same tamper-evident artifact path and have browser/API detail views that
+verify canonical payload digests before rendering evidence.
 
 Runtime adapters and evaluators use typed protocols so future integrations can be added without
 rewriting the core engine.

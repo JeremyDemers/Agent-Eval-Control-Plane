@@ -24,6 +24,7 @@ Implemented ahead of the original four-day scope:
 - Queue-aware KEDA scaling for CPU and NVIDIA workers
 - First-class NVIDIA NIM runtime for hosted and self-hosted endpoints
 - Durable, tamper-evident NeMo Guardrails checks across REST and sync/async SDKs
+- Browser Guardrails evidence explorer and low-cardinality safety metrics
 
 Next stages:
 

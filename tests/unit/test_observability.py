@@ -12,6 +12,8 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
     snapshot = OperationalSnapshot(
         runs_total=3,
         comparisons_total=2,
+        guardrail_evidence_total=4,
+        guardrail_interventions_total=1,
         job_counts={"completed": 1},
         gate_counts={"BLOCK": 1},
         workers_registered=2,
@@ -48,6 +50,8 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
     payload = render_prometheus(snapshot, [worker])
 
     assert "aecontrol_runs_total 3" in payload
+    assert "aecontrol_guardrail_evidence_total 4" in payload
+    assert "aecontrol_guardrail_interventions_total 1" in payload
     assert 'aecontrol_jobs{status="queued"} 0' in payload
     assert 'aecontrol_jobs{status="completed"} 1' in payload
     assert 'aecontrol_gate_decisions{outcome="BLOCK"} 1' in payload
