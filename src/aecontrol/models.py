@@ -308,6 +308,10 @@ class EvaluationJob(BaseModel):
     required_labels: dict[str, str] = Field(default_factory=dict)
     minimum_gpu_memory_mb: int = Field(default=0, ge=0)
     minimum_cuda_compute_capability: float | None = Field(default=None, ge=1)
+    traceparent: str | None = Field(
+        default=None, pattern=r"^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+    )
+    request_id: str | None = None
 
     @model_validator(mode="after")
     def gpu_constraints_require_cuda(self) -> EvaluationJob:

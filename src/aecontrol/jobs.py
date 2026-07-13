@@ -8,6 +8,7 @@ from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.hardware import detect_worker_capabilities
 from aecontrol.models import EvaluationJob, WorkerCapabilities
 from aecontrol.store import ArtifactStore
+from aecontrol.tracing import span
 
 
 class EvaluationWorker:
@@ -52,11 +53,20 @@ class EvaluationWorker:
         heartbeat_stop = asyncio.Event()
         heartbeat = asyncio.create_task(self._heartbeat(job, heartbeat_stop))
         try:
-            run = await EvaluationEngine().run(load_suite(Path(job.suite_path)), job.agent_version)
-            await asyncio.to_thread(self.store.save_run, run)
-            return await asyncio.to_thread(
-                self.store.complete_job, job.job_id, self.worker_id, run.run_id
-            )
+            with span(
+                "evaluation.job",
+                job.traceparent,
+                job_id=str(job.job_id),
+                worker_id=self.worker_id,
+                agent_version=job.agent_version,
+            ):
+                run = await EvaluationEngine().run(
+                    load_suite(Path(job.suite_path)), job.agent_version
+                )
+                await asyncio.to_thread(self.store.save_run, run)
+                return await asyncio.to_thread(
+                    self.store.complete_job, job.job_id, self.worker_id, run.run_id
+                )
         except Exception as error:
             message = f"{type(error).__name__}: {error}"
             try:
