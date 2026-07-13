@@ -139,3 +139,62 @@ def test_mig_overlay_consumes_profile_resources_and_advertises_them() -> None:
     project = tomllib.loads(Path("pyproject.toml").read_text())
     assert kustomization["resources"] == ["../../kubernetes", "workers.yaml"]
     assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+
+
+def test_cloudnative_pg_overlay_replaces_development_database_with_quorum_cluster() -> None:
+    root = Path("deploy/overlays/cloudnative-pg")
+    cluster = yaml.safe_load((root / "cluster.yaml").read_text())
+    spec = cluster["spec"]
+
+    assert cluster["apiVersion"] == "postgresql.cnpg.io/v1"
+    assert cluster["kind"] == "Cluster"
+    assert cluster["metadata"]["name"] == "aecontrol-postgres"
+    assert spec["instances"] == 3
+    assert spec["enableSuperuserAccess"] is False
+    assert spec["imageName"].endswith(":17-standard-trixie")
+    assert spec["primaryUpdateStrategy"] == "unsupervised"
+    assert spec["primaryUpdateMethod"] == "switchover"
+    assert spec["bootstrap"]["initdb"] == {
+        "database": "aecontrol",
+        "owner": "aecontrol",
+        "dataChecksums": True,
+        "encoding": "UTF8",
+    }
+    synchronous = spec["postgresql"]["synchronous"]
+    assert synchronous == {
+        "method": "any",
+        "number": 1,
+        "dataDurability": "required",
+        "failoverQuorum": True,
+    }
+    assert spec["affinity"] == {
+        "enablePodAntiAffinity": True,
+        "topologyKey": "kubernetes.io/hostname",
+        "podAntiAffinityType": "required",
+    }
+    assert spec["storage"]["size"] == "20Gi"
+    assert spec["walStorage"]["size"] == "5Gi"
+
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    assert kustomization["resources"] == ["../../kubernetes", "cluster.yaml"]
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+    patches = kustomization["patches"]
+    deleted = {(item["target"]["kind"], item["target"].get("name")) for item in patches[:2]}
+    assert deleted == {("StatefulSet", "postgres"), ("Service", "postgres")}
+    database_patch = patches[2]
+    assert database_patch["target"]["kind"] == "Deployment"
+    assert "aecontrol-postgres-app" in database_patch["patch"]
+    assert "value: uri" in database_patch["patch"]
+
+
+def test_cloudnative_pg_monitoring_is_explicitly_opt_in() -> None:
+    root = Path("deploy/overlays/cloudnative-pg-monitoring")
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    monitor = yaml.safe_load((root / "podmonitor.yaml").read_text())
+
+    assert kustomization["resources"] == ["../cloudnative-pg", "podmonitor.yaml"]
+    assert monitor["kind"] == "PodMonitor"
+    assert monitor["spec"]["selector"]["matchLabels"] == {"cnpg.io/cluster": "aecontrol-postgres"}
+    endpoint = monitor["spec"]["podMetricsEndpoints"][0]
+    assert endpoint == {"port": "metrics", "interval": "30s", "scrapeTimeout": "10s"}

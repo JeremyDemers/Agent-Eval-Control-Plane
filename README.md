@@ -238,6 +238,8 @@ kubectl apply -k deploy/kubernetes
 
 Tagged releases publish a GHCR image with an SBOM and build provenance. See
 [`docs/kubernetes.md`](docs/kubernetes.md) for secret setup, rollout checks, and production boundaries.
+The production CloudNativePG overlay provisions a three-instance PostgreSQL 17 cluster with
+synchronous replication, quorum-guarded failover, topology spread, and an optional PodMonitor.
 An optional KEDA overlay scales CPU and NVIDIA workers from durable PostgreSQL queue depth.
 An independent MIG overlay consumes profile-specific resources exposed by NVIDIA GPU Operator's
 mixed strategy and registers profile-aware worker pools.
@@ -253,7 +255,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.35.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.36.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -436,9 +438,9 @@ model limits.
 
 The browser explorer is intentionally local-trust for this portfolio phase. The default process
 backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
-the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator or
-DCGM Exporter. Database provisioning and failover, additional hosted providers, object storage, and
-multi-tenancy remain in `docs/roadmap.md`.
+the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
+DCGM Exporter, CloudNativePG, or Prometheus Operator. Cross-region disaster recovery, point-in-time
+recovery, additional hosted providers, object storage, and multi-tenancy remain in `docs/roadmap.md`.
 
 ## Project Governance
 

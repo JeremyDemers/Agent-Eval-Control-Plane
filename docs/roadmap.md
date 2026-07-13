@@ -37,10 +37,11 @@ Implemented ahead of the original four-day scope:
 - Bounded PostgreSQL connection pools, saturation metrics, and advisory-locked schema initialization
 - DCGM Exporter-backed full-GPU and pod-mapped MIG admission telemetry
 - Evidence-qualified UTC hour-of-week GPU demand and saturation forecasting
+- Three-instance CloudNativePG provisioning with synchronous quorum failover and opt-in monitoring
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
-- PostgreSQL operator/provisioning integration
+- Cross-region disaster recovery and object-storage PostgreSQL point-in-time recovery
 - Additional hosted provider authentication and endpoint-specific adapters
 - Multi-tenancy, immutable object storage, and KMS/asymmetric attestations
