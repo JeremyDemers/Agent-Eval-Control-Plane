@@ -35,9 +35,10 @@ def test_kubernetes_workloads_enforce_operational_contracts() -> None:
     assert api_container["livenessProbe"]["httpGet"]["path"] == "/healthz"
     assert api["spec"]["replicas"] == 2
 
-    for name in ("api", "cpu-worker"):
+    for name in ("api", "cpu-worker", "gpu-worker"):
         pod_spec = by_name[("Deployment", name)]["spec"]["template"]["spec"]
         assert pod_spec["securityContext"]["runAsNonRoot"] is True
+        assert pod_spec["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
         container = pod_spec["containers"][0]
         assert container["securityContext"]["allowPrivilegeEscalation"] is False
         assert container["securityContext"]["capabilities"]["drop"] == ["ALL"]
@@ -115,6 +116,7 @@ def test_mig_overlay_consumes_profile_resources_and_advertises_them() -> None:
         pod_spec = deployment["spec"]["template"]["spec"]
         assert pod_spec["nodeSelector"] == {"nvidia.com/mig.strategy": "mixed"}
         assert pod_spec["securityContext"]["runAsNonRoot"] is True
+        assert pod_spec["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
         container = pod_spec["containers"][0]
         env = {item["name"]: item for item in container["env"]}
         assert env["AECONTROL_MIG_PROFILE"]["value"] == profile
@@ -123,6 +125,7 @@ def test_mig_overlay_consumes_profile_resources_and_advertises_them() -> None:
         assert container["resources"]["limits"][resource] == "1"
         assert "pool=kubernetes-mig" in container["command"]
         assert "runtime=nvidia-nim" in container["command"]
+        assert container["securityContext"]["allowPrivilegeEscalation"] is False
         assert container["securityContext"]["capabilities"]["drop"] == ["ALL"]
 
     kustomization = yaml.safe_load(Path("deploy/overlays/mig/kustomization.yaml").read_text())

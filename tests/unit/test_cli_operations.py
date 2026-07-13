@@ -39,6 +39,23 @@ def test_doctor_reports_sanitized_telemetry_destination(monkeypatch) -> None:  #
     assert "collector-secret" not in result.output
 
 
+def test_doctor_reports_hardened_podman_configuration(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("AECONTROL_SANDBOX_BACKEND", "podman")
+    monkeypatch.setenv(
+        "AECONTROL_SANDBOX_IMAGE",
+        "registry.example/aecontrol-sandbox@sha256:" + "a" * 64,
+    )
+    monkeypatch.setenv("AECONTROL_SANDBOX_REQUIRE_DIGEST", "true")
+    monkeypatch.setenv("AECONTROL_SANDBOX_APPARMOR_PROFILE", "aecontrol-sandbox")
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "sandbox image: digest-pinned (pinning required)" in result.output
+    assert "seccomp=runtime-default" in result.output
+    assert "apparmor=aecontrol-sandbox" in result.output
+
+
 def test_one_shot_worker_always_shuts_down_telemetry(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     events: list[str] = []
 

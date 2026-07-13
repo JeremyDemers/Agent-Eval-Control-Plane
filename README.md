@@ -237,7 +237,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.31.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.32.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -248,15 +248,18 @@ See [`docs/releases.md`](docs/releases.md) for the release contract and verifica
 The default process sandbox enforces source-size, syntax, import/call, wall-clock, CPU, address-space,
 file-size, descriptor, process-count, output, and environment limits. A rootless Podman backend adds a
 read-only workspace, disabled networking, dropped Linux capabilities, `no-new-privileges`, an
-unprivileged UID, and container CPU/memory/PID limits.
+unprivileged UID, container CPU/memory/PID limits, digest enforcement, and optional custom
+seccomp/AppArmor policies.
 
 ```bash
 make sandbox-demo
 AECONTROL_SANDBOX_BACKEND=podman uv run aecontrol doctor
 ```
 
-Every run records `sandbox_backend` provenance. See [`docs/security.md`](docs/security.md) for the
-threat model and remaining boundary assumptions.
+`make sandbox-demo` resolves the cached Python image to its immutable repository digest and runs all
+four slices with `AECONTROL_SANDBOX_REQUIRE_DIGEST=true`. Every evaluation records `sandbox_backend`
+provenance. See [`docs/security.md`](docs/security.md) for production configuration, kernel-policy
+controls, and the remaining VM isolation boundary.
 
 CodeQL, pull-request dependency review, and a weekly `uv.lock`-derived vulnerability audit run in
 GitHub Actions. The local equivalent is:
@@ -415,10 +418,11 @@ model limits.
 
 ## Current Limitations
 
-The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
-hardened isolation for untrusted code. The project consumes but does not install or reconfigure NVIDIA
-GPU Operator; production MIG telemetry should be collected with DCGM. Managed database integration,
-additional hosted providers, object storage, and multi-tenancy remain in `docs/roadmap.md`.
+The browser explorer is intentionally local-trust for this portfolio phase. The default process
+backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
+the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator;
+production MIG telemetry should be collected with DCGM. Managed database integration, additional
+hosted providers, object storage, and multi-tenancy remain in `docs/roadmap.md`.
 
 ## Project Governance
 

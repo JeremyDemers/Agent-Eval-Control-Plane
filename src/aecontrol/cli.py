@@ -32,6 +32,7 @@ from aecontrol.nim import NIMClient
 from aecontrol.ollama import OllamaClient, OllamaError
 from aecontrol.openai_compatible import OpenAICompatibleClient, OpenAICompatibleError
 from aecontrol.reports import render_html
+from aecontrol.sandbox import podman_sandbox_configuration_from_environment
 from aecontrol.store import ArtifactStore
 from aecontrol.telemetry import (
     configure_telemetry_from_environment,
@@ -74,6 +75,17 @@ def doctor() -> None:
     console.print(f"sandbox: {backend}")
     if backend == "podman":
         console.print(f"podman: {shutil.which('podman') or 'not found'}")
+        sandbox = podman_sandbox_configuration_from_environment()
+        pinning = "required" if sandbox.require_digest else "optional"
+        console.print(
+            f"sandbox image: {'digest-pinned' if sandbox.digest_pinned else 'tagged'} "
+            f"(pinning {pinning})"
+        )
+        console.print(
+            "sandbox policies: "
+            f"seccomp={'custom' if sandbox.seccomp_profile else 'runtime-default'}, "
+            f"apparmor={sandbox.apparmor_profile or 'runtime-default'}"
+        )
     telemetry = telemetry_configuration_from_environment()
     telemetry_detail = (
         f"{telemetry.mode} host={telemetry.endpoint_host}" if telemetry.enabled else telemetry.mode

@@ -3,10 +3,12 @@ from __future__ import annotations
 import ast
 import difflib
 import os
+import re
 import resource
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,6 +16,11 @@ from typing import Protocol
 from uuid import uuid4
 
 from aecontrol.models import DatasetCase, ToolCall, ToolResult
+
+DEFAULT_SANDBOX_IMAGE = "python:3.12-slim"
+IMAGE_REFERENCE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,511}$")
+SHA256_IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,511}@sha256:[0-9a-f]{64}$")
+APPARMOR_PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$")
 
 
 @dataclass
@@ -46,6 +53,53 @@ class SandboxPolicy:
     )
     denied_calls: frozenset[str] = field(
         default_factory=lambda: frozenset({"__import__", "compile", "eval", "exec", "open"})
+    )
+
+
+@dataclass(frozen=True)
+class PodmanSandboxConfiguration:
+    image: str = DEFAULT_SANDBOX_IMAGE
+    require_digest: bool = False
+    seccomp_profile: Path | None = None
+    apparmor_profile: str | None = None
+
+    def __post_init__(self) -> None:
+        if "@" in self.image and not self.digest_pinned:
+            raise ValueError("sandbox image contains an invalid SHA-256 digest")
+        if not self.digest_pinned and not IMAGE_REFERENCE_PATTERN.fullmatch(self.image):
+            raise ValueError("sandbox image is not a valid OCI image reference")
+        if self.require_digest and not self.digest_pinned:
+            raise ValueError("sandbox image must be pinned by SHA-256 digest")
+        if self.seccomp_profile is not None:
+            resolved_profile = self.seccomp_profile.expanduser().resolve()
+            if not resolved_profile.is_file() or not os.access(resolved_profile, os.R_OK):
+                raise ValueError("sandbox seccomp profile must be a readable regular file")
+            object.__setattr__(self, "seccomp_profile", resolved_profile)
+        if self.apparmor_profile is not None:
+            if self.apparmor_profile.lower() == "unconfined":
+                raise ValueError("sandbox AppArmor profile cannot disable confinement")
+            if not APPARMOR_PROFILE_PATTERN.fullmatch(self.apparmor_profile):
+                raise ValueError("sandbox AppArmor profile name is invalid")
+
+    @property
+    def digest_pinned(self) -> bool:
+        return SHA256_IMAGE_PATTERN.fullmatch(self.image) is not None
+
+
+def podman_sandbox_configuration_from_environment(
+    environment: Mapping[str, str] | None = None,
+) -> PodmanSandboxConfiguration:
+    env = environment if environment is not None else os.environ
+    seccomp_value = env.get("AECONTROL_SANDBOX_SECCOMP_PROFILE", "").strip()
+    apparmor_value = env.get("AECONTROL_SANDBOX_APPARMOR_PROFILE", "").strip()
+    return PodmanSandboxConfiguration(
+        image=env.get("AECONTROL_SANDBOX_IMAGE", DEFAULT_SANDBOX_IMAGE).strip(),
+        require_digest=_environment_boolean(
+            env.get("AECONTROL_SANDBOX_REQUIRE_DIGEST"),
+            "AECONTROL_SANDBOX_REQUIRE_DIGEST",
+        ),
+        seccomp_profile=Path(seccomp_value) if seccomp_value else None,
+        apparmor_profile=apparmor_value or None,
     )
 
 
@@ -91,12 +145,26 @@ class ProcessTestExecutor:
 class PodmanTestExecutor:
     name = "podman"
 
-    def __init__(self, image: str = "python:3.12-slim") -> None:
+    def __init__(
+        self,
+        image: str = DEFAULT_SANDBOX_IMAGE,
+        *,
+        require_digest: bool = False,
+        seccomp_profile: Path | None = None,
+        apparmor_profile: str | None = None,
+    ) -> None:
         executable = shutil.which("podman")
         if executable is None:
             raise RuntimeError("Podman sandbox requested but podman is not installed")
+        configuration = PodmanSandboxConfiguration(
+            image=image,
+            require_digest=require_digest,
+            seccomp_profile=seccomp_profile,
+            apparmor_profile=apparmor_profile,
+        )
         self.executable = executable
-        self.image = image
+        self.configuration = configuration
+        self.image = configuration.image
 
     def run_test(self, root: Path, test_path: Path, policy: SandboxPolicy) -> tuple[bool, str]:
         container_name = f"aecontrol-{uuid4().hex}"
@@ -114,15 +182,23 @@ class PodmanTestExecutor:
             "--read-only",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
-            "--user=65534:65534",
-            "--volume",
-            f"{root}:/workspace:ro,Z",
-            "--workdir=/workspace",
-            self.image,
-            "python",
-            "-B",
-            f"/workspace/{test_path.name}",
         ]
+        if self.configuration.seccomp_profile is not None:
+            command.append(f"--security-opt=seccomp={self.configuration.seccomp_profile}")
+        if self.configuration.apparmor_profile is not None:
+            command.append(f"--security-opt=apparmor={self.configuration.apparmor_profile}")
+        command.extend(
+            [
+                "--user=65534:65534",
+                "--volume",
+                f"{root}:/workspace:ro,Z",
+                "--workdir=/workspace",
+                self.image,
+                "python",
+                "-B",
+                f"/workspace/{test_path.name}",
+            ]
+        )
         try:
             proc = subprocess.run(
                 command,
@@ -340,8 +416,25 @@ def _executor_from_environment() -> TestExecutor:
     if backend == "process":
         return ProcessTestExecutor()
     if backend == "podman":
-        return PodmanTestExecutor(os.getenv("AECONTROL_SANDBOX_IMAGE", "python:3.12-slim"))
+        configuration = podman_sandbox_configuration_from_environment()
+        return PodmanTestExecutor(
+            configuration.image,
+            require_digest=configuration.require_digest,
+            seccomp_profile=configuration.seccomp_profile,
+            apparmor_profile=configuration.apparmor_profile,
+        )
     raise ValueError(f"unknown sandbox backend: {backend}")
+
+
+def _environment_boolean(value: str | None, name: str) -> bool:
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
 
 
 def _podman_environment() -> dict[str, str]:

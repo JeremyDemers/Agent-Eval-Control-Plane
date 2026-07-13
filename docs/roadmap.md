@@ -33,10 +33,11 @@ Implemented ahead of the original four-day scope:
 - Supervised NeMo Guardrails policy efficacy with per-version confusion matrices and bounded trends
 - LangGraph v2 runtime interoperability with graph-node, subgraph, tool, and failure evidence
 - Batched OpenTelemetry OTLP/HTTP trace export across API and durable worker boundaries
+- Digest-enforced Podman sandboxes with configurable seccomp/AppArmor policy and hardened GPU pods
 
 Next stages:
 
-- Pinned sandbox images with seccomp/AppArmor and microVM isolation
+- VM or microVM isolation for actively hostile candidate code
 - Production database/operator integration and seasonal GPU demand prediction
 - Additional hosted provider authentication and endpoint-specific adapters
 - Multi-tenancy, immutable object storage, and KMS/asymmetric attestations
