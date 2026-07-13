@@ -106,7 +106,82 @@ The monitoring overlay requires the `monitoring.coreos.com/v1` PodMonitor CRD. T
 pinned to the PostgreSQL 17 standard track; production promotion should resolve and approve an image
 digest under the organization's patching policy.
 
-High availability is not disaster recovery. This overlay does not yet configure object-storage
-backups, retention, restore testing, or point-in-time recovery. Those controls are required before a
-production launch, along with external secret management, encryption policy, alerting, and a tested
-failure-and-restore runbook.
+High availability is not disaster recovery. The following backup overlay adds a recovery path, but
+production still requires external secret management, bucket immutability, restore drills, alert
+routing, and organization-specific recovery objectives.
+
+## Object-Storage Backups
+
+The `cloudnative-pg-pitr` overlay uses Barman Cloud's CNPG-I plugin rather than CloudNativePG's
+deprecated in-tree object-store integration. It archives WAL continuously, requests gzip compression
+and S3 AES256 server-side encryption, starts one backup immediately, schedules later base backups at
+02:00 UTC each day, prefers a standby, and maintains a 30-day recovery window.
+
+The plugin requires cert-manager and must run in the same namespace as the CloudNativePG operator.
+Install the pinned plugin release after verifying both prerequisites:
+
+```bash
+cmctl check api
+kubectl get deployment -n cnpg-system cnpg-controller-manager \
+  -o jsonpath='{.spec.template.spec.containers[*].image}'
+kubectl apply -f \
+  https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.13.0/manifest.yaml
+kubectl rollout status deployment/barman-cloud -n cnpg-system --timeout=5m
+```
+
+Create the S3 credential Secret from an external secret manager. For an isolated test environment,
+the excluded example documents the required keys:
+
+```bash
+cp deploy/overlays/cloudnative-pg-pitr/backup-secret.example.yaml \
+  /tmp/aecontrol-backup-s3.yaml
+# Replace both placeholders without committing the result.
+kubectl apply -f /tmp/aecontrol-backup-s3.yaml
+```
+
+Before applying the overlay, replace `s3://replace-with-backup-bucket/aecontrol` in
+`object-store.yaml` through an environment-owned Kustomize patch. Use a dedicated bucket or prefix,
+enable bucket versioning and object lock, and apply lifecycle expiration after the 30-day Barman
+window. Prefer workload identity such as EKS IRSA over long-lived access keys where the provider
+supports it.
+
+```bash
+kubectl apply -k deploy/overlays/cloudnative-pg-pitr
+kubectl -n aecontrol get scheduledbackup,backup
+kubectl -n aecontrol get objectstore aecontrol-postgres-backup -o yaml
+```
+
+Do not call the backup system healthy merely because the resources exist. Wait for a `Backup` with a
+`completed` phase, confirm `status.serverRecoveryWindow` has a first recoverability point and latest
+successful backup, and verify archived objects from the storage provider. The optional
+`cloudnative-pg-pitr-monitoring` overlay includes the database PodMonitor plus critical alerts when
+the latest backup failed, the success metric is absent for one hour, or the latest successful base
+backup is more than 25 hours old.
+
+## Point-in-Time Recovery Drill
+
+Recovery creates a new cluster; it never overwrites the source cluster in place. Record the intended
+UTC recovery timestamp from incident evidence, confirm it falls within the reported recovery window,
+and create an isolated manifest from the excluded template:
+
+```bash
+cp deploy/overlays/cloudnative-pg-pitr/restore.example.yaml \
+  /tmp/aecontrol-postgres-restore.yaml
+# Replace REPLACE_WITH_RFC3339_TIMESTAMP, for example 2026-07-13T18:42:00Z.
+kubectl apply -f /tmp/aecontrol-postgres-restore.yaml
+kubectl -n aecontrol wait --for=condition=Ready cluster/aecontrol-postgres-restore \
+  --timeout=30m
+kubectl -n aecontrol get pods,pvc -l cnpg.io/cluster=aecontrol-postgres-restore
+```
+
+The restore template reads from the original `aecontrol-postgres` archive but does not enable WAL
+archiving for the candidate. CloudNativePG generates fresh connection credentials in
+`aecontrol-postgres-restore-app`; the original Kubernetes Secrets are not part of the physical
+database backup and must be recoverable from the external secret manager.
+
+Validate schema version, row counts, integrity signatures, representative run evidence, and the
+chosen stopping point against the isolated read-write service. Keep application deployments pointed
+at the original Secret until an incident commander approves a reviewed Kustomize cutover to the
+restore Secret's `uri` key. Preserve the failed cluster and archive, then configure a new write
+destination before enabling backups on the promoted cluster. Removing `recoveryTarget` from a copy
+of the template performs recovery through the latest available WAL instead of timestamp-based PITR.

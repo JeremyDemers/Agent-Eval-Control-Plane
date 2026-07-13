@@ -38,10 +38,11 @@ Implemented ahead of the original four-day scope:
 - DCGM Exporter-backed full-GPU and pod-mapped MIG admission telemetry
 - Evidence-qualified UTC hour-of-week GPU demand and saturation forecasting
 - Three-instance CloudNativePG provisioning with synchronous quorum failover and opt-in monitoring
+- Barman Cloud WAL archiving, daily base backups, 30-day retention, PITR template, and backup alerts
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
-- Cross-region disaster recovery and object-storage PostgreSQL point-in-time recovery
+- Automated scheduled restore drills and cross-region PostgreSQL replica promotion
 - Additional hosted provider authentication and endpoint-specific adapters
 - Multi-tenancy, immutable object storage, and KMS/asymmetric attestations

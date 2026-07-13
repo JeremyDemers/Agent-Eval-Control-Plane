@@ -1,0 +1,26 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aecontrol-postgres-backups
+spec:
+  groups:
+    - name: aecontrol-postgres-backups
+      rules:
+        - alert: AgentEvalPostgresBackupFailed
+          expr: >-
+            barman_cloud_cloudnative_pg_io_last_failed_backup_timestamp
+            > barman_cloud_cloudnative_pg_io_last_available_backup_timestamp
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: The latest AgentEval PostgreSQL base backup failed
+        - alert: AgentEvalPostgresBackupStale
+          expr: >-
+            (time() - barman_cloud_cloudnative_pg_io_last_available_backup_timestamp > 90000)
+            or absent(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp)
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: AgentEval has no recent successful PostgreSQL base backup

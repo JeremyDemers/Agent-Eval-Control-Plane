@@ -1,0 +1,44 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: aecontrol-postgres-restore
+  namespace: aecontrol
+spec:
+  description: Isolated AgentEval point-in-time recovery candidate
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:17-standard-trixie
+  enableSuperuserAccess: false
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: switchover
+  bootstrap:
+    recovery:
+      source: aecontrol-postgres-source
+      recoveryTarget:
+        targetTime: REPLACE_WITH_RFC3339_TIMESTAMP
+  externalClusters:
+    - name: aecontrol-postgres-source
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: aecontrol-postgres-backup
+          serverName: aecontrol-postgres
+  postgresql:
+    parameters:
+      max_connections: "100"
+      shared_buffers: 256MB
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
+      failoverQuorum: true
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {cpu: "2", memory: 4Gi}
+  storage:
+    size: 20Gi
+  walStorage:
+    size: 5Gi

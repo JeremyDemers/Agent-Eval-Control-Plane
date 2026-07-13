@@ -27,7 +27,7 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.36.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.37.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
@@ -79,6 +79,11 @@ kubectl -n aecontrol wait --for=condition=Ready cluster/aecontrol-postgres --tim
 Install CloudNativePG first and review the node, storage, durability, image-promotion, and backup
 requirements in [`database.md`](database.md). Clusters with Prometheus Operator installed can apply
 `deploy/overlays/cloudnative-pg-monitoring` instead to include an explicit PodMonitor.
+
+For continuous WAL archiving and point-in-time recovery, use the Barman Cloud plugin overlay after
+configuring its S3 destination and credentials. The `cloudnative-pg-pitr-monitoring` composition adds
+backup age and failure alerts to the database PodMonitor. See [`database.md`](database.md) for the
+installation order, restore workflow, and cutover controls.
 
 ## NVIDIA MIG Workers
 

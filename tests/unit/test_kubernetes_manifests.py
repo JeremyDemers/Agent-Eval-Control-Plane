@@ -198,3 +198,92 @@ def test_cloudnative_pg_monitoring_is_explicitly_opt_in() -> None:
     assert monitor["spec"]["selector"]["matchLabels"] == {"cnpg.io/cluster": "aecontrol-postgres"}
     endpoint = monitor["spec"]["podMetricsEndpoints"][0]
     assert endpoint == {"port": "metrics", "interval": "30s", "scrapeTimeout": "10s"}
+
+
+def test_cloudnative_pg_pitr_uses_plugin_backups_and_bounded_retention() -> None:
+    root = Path("deploy/overlays/cloudnative-pg-pitr")
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    assert kustomization["resources"] == [
+        "../cloudnative-pg",
+        "object-store.yaml",
+        "scheduled-backup.yaml",
+    ]
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+    assert "barman-cloud.cloudnative-pg.io" in kustomization["patches"][0]["patch"]
+    assert "isWALArchiver: true" in kustomization["patches"][0]["patch"]
+
+    object_store = yaml.safe_load((root / "object-store.yaml").read_text())
+    assert object_store["apiVersion"] == "barmancloud.cnpg.io/v1"
+    assert object_store["kind"] == "ObjectStore"
+    assert object_store["metadata"]["name"] == "aecontrol-postgres-backup"
+    spec = object_store["spec"]
+    assert spec["retentionPolicy"] == "30d"
+    assert spec["configuration"]["destinationPath"].startswith("s3://replace-with-")
+    assert spec["configuration"]["wal"] == {
+        "compression": "gzip",
+        "encryption": "AES256",
+        "maxParallel": 8,
+    }
+    assert spec["configuration"]["data"] == {
+        "compression": "gzip",
+        "encryption": "AES256",
+    }
+    credentials = spec["configuration"]["s3Credentials"]
+    assert {item["name"] for item in credentials.values()} == {"aecontrol-backup-s3"}
+    assert spec["instanceSidecarConfiguration"]["retentionPolicyIntervalSeconds"] == 1800
+
+    scheduled = yaml.safe_load((root / "scheduled-backup.yaml").read_text())
+    assert scheduled["kind"] == "ScheduledBackup"
+    assert scheduled["spec"] == {
+        "schedule": "0 0 2 * * *",
+        "immediate": True,
+        "suspend": False,
+        "backupOwnerReference": "self",
+        "target": "prefer-standby",
+        "cluster": {"name": "aecontrol-postgres"},
+        "method": "plugin",
+        "pluginConfiguration": {"name": "barman-cloud.cloudnative-pg.io"},
+    }
+    assert "backup-secret.example.yaml" not in kustomization["resources"]
+    assert "restore.example.yaml" not in kustomization["resources"]
+
+
+def test_cloudnative_pg_restore_template_is_isolated_and_time_targeted() -> None:
+    restore = yaml.safe_load(
+        Path("deploy/overlays/cloudnative-pg-pitr/restore.example.yaml").read_text()
+    )
+    spec = restore["spec"]
+    assert restore["metadata"]["name"] == "aecontrol-postgres-restore"
+    assert spec["instances"] == 3
+    recovery = spec["bootstrap"]["recovery"]
+    assert recovery["source"] == "aecontrol-postgres-source"
+    assert recovery["recoveryTarget"]["targetTime"] == "REPLACE_WITH_RFC3339_TIMESTAMP"
+    external = spec["externalClusters"][0]
+    assert external["name"] == recovery["source"]
+    assert external["plugin"]["parameters"] == {
+        "barmanObjectName": "aecontrol-postgres-backup",
+        "serverName": "aecontrol-postgres",
+    }
+    assert "plugins" not in spec
+    assert spec["storage"]["size"] == "20Gi"
+    assert spec["walStorage"]["size"] == "5Gi"
+
+
+def test_cloudnative_pg_pitr_monitoring_alerts_on_failed_and_stale_backups() -> None:
+    root = Path("deploy/overlays/cloudnative-pg-pitr-monitoring")
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    assert kustomization["resources"] == [
+        "../cloudnative-pg-pitr",
+        "podmonitor.yaml",
+        "prometheus-rules.yaml",
+    ]
+    rules = yaml.safe_load((root / "prometheus-rules.yaml").read_text())
+    alerts = {item["alert"]: item for item in rules["spec"]["groups"][0]["rules"]}
+    assert set(alerts) == {"AgentEvalPostgresBackupFailed", "AgentEvalPostgresBackupStale"}
+    for alert in alerts.values():
+        assert "barman_cloud_cloudnative_pg_io" in alert["expr"]
+        assert alert["labels"]["severity"] == "critical"
+    assert alerts["AgentEvalPostgresBackupFailed"]["for"] == "15m"
+    assert alerts["AgentEvalPostgresBackupStale"]["for"] == "1h"
+    assert "absent(" in alerts["AgentEvalPostgresBackupStale"]["expr"]
