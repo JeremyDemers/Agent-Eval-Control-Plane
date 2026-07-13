@@ -857,7 +857,7 @@ def _render_dashboard(
 
 
 def _gpu_summary(gpu: GpuDevice) -> str:
-    telemetry: list[str] = []
+    telemetry: list[str] = [gpu.telemetry_source]
     if gpu.mig_profile is not None:
         telemetry.append(f"MIG {gpu.mig_profile}")
     if gpu.utilization_percent is not None:

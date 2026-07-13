@@ -48,6 +48,7 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
                     power_draw_watts=80,
                     compute_capability="8.9",
                     mig_profile="3g.40gb",
+                    telemetry_source="dcgm-exporter",
                 )
             ],
         ),
@@ -118,7 +119,7 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
     assert 'aecontrol_gate_decisions{outcome="BLOCK"} 1' in payload
     assert "aecontrol_average_completed_job_seconds 1.250000" in payload
     assert 'worker="worker-\\"one\\""' in payload
-    assert 'partition="mig",mig_profile="3g.40gb"' in payload
+    assert 'partition="mig",mig_profile="3g.40gb",telemetry_source="dcgm-exporter"' in payload
     assert "aecontrol_gpu_memory_used_bytes" in payload
     assert "4194304000" in payload
     assert "aecontrol_gpu_memory_available_bytes" in payload

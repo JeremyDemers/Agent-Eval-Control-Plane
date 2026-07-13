@@ -69,6 +69,21 @@ def test_doctor_reports_bounded_database_pool(monkeypatch) -> None:  # type: ign
     assert "database migration lock: 15s" in result.output
 
 
+def test_doctor_reports_sanitized_dcgm_destination(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv(
+        "AECONTROL_DCGM_EXPORTER_URL",
+        "https://metrics-user:metrics-secret@dcgm.example:9400/metrics",
+    )
+    monkeypatch.setenv("AECONTROL_DCGM_POD_NAME", "gpu-worker-1")
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "dcgm exporter: enabled host=dcgm.example timeout=1s pod=gpu-worker-1" in result.output
+    assert "metrics-user" not in result.output
+    assert "metrics-secret" not in result.output
+
+
 def test_one_shot_worker_always_shuts_down_telemetry(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     events: list[str] = []
 
@@ -80,10 +95,11 @@ def test_one_shot_worker_always_shuts_down_telemetry(monkeypatch) -> None:  # ty
             events.append("store-close")
 
     class Worker:
-        def __init__(self, *_args, **_kwargs) -> None:  # type: ignore[no-untyped-def]
-            pass
+        def __init__(self, *_args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            self.capability_provider = kwargs["capability_provider"]
 
         async def run_once(self):  # type: ignore[no-untyped-def]
+            self.capability_provider()
             return None
 
     monkeypatch.setattr(
@@ -92,13 +108,16 @@ def test_one_shot_worker_always_shuts_down_telemetry(monkeypatch) -> None:  # ty
     monkeypatch.setattr("aecontrol.cli.shutdown_telemetry", lambda: events.append("shutdown"))
     monkeypatch.setattr("aecontrol.cli.ArtifactStore", Store)
     monkeypatch.setattr("aecontrol.cli.EvaluationWorker", Worker)
-    monkeypatch.setattr("aecontrol.cli.detect_worker_capabilities", lambda _labels: object())
+    monkeypatch.setattr(
+        "aecontrol.cli.detect_worker_capabilities",
+        lambda _labels: events.append("capabilities") or object(),
+    )
 
     result = CliRunner().invoke(app, ["worker", "--once"])
 
     assert result.exit_code == 0
     assert "queue empty" in result.output
-    assert events == ["start", "store-close", "shutdown"]
+    assert events == ["start", "capabilities", "store-close", "shutdown"]
 
 
 def test_hardware_command_supports_human_and_json_output() -> None:

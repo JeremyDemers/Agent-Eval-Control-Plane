@@ -91,9 +91,11 @@ protobuf export from APIs and workers without changing application code. See
 [`docs/distributed-tracing.md`](docs/distributed-tracing.md) for collector configuration and the
 telemetry privacy contract.
 
-Workers also refresh NVIDIA GPU telemetry through `nvidia-smi` on lease heartbeats. Jobs can request
-`cpu` or `cuda` and exact-match pool labels; Prometheus exposes per-device memory, utilization,
-temperature, and power gauges. Incompatible workers skip jobs without consuming an attempt. See
+Workers refresh NVIDIA GPU telemetry on lease heartbeats. Local discovery uses `nvidia-smi`; setting
+`AECONTROL_DCGM_EXPORTER_URL` promotes DCGM Exporter metrics to the live admission source, including
+pod-mapped MIG telemetry. Jobs can request `cpu` or `cuda` and exact-match pool labels; Prometheus
+exposes per-device memory, utilization, temperature, power, and telemetry provenance. Incompatible
+workers skip jobs without consuming an attempt. See
 [`docs/hardware-scheduling.md`](docs/hardware-scheduling.md) for the normalized capability contract.
 
 CUDA jobs may require minimum framebuffer capacity, compute capability, live free memory, and a
@@ -241,7 +243,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.33.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.34.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -424,9 +426,9 @@ model limits.
 
 The browser explorer is intentionally local-trust for this portfolio phase. The default process
 backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
-the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator;
-production MIG telemetry should be collected with DCGM. Database provisioning and failover,
-additional hosted providers, object storage, and multi-tenancy remain in `docs/roadmap.md`.
+the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator or
+DCGM Exporter. Database provisioning and failover, additional hosted providers, object storage, and
+multi-tenancy remain in `docs/roadmap.md`.
 
 ## Project Governance
 

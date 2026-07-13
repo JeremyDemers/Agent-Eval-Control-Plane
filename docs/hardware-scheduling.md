@@ -70,10 +70,27 @@ the control plane does not infer partition geometry from memory size.
 
 NVIDIA documents MIG device UUIDs and CUDA visibility in its
 [MIG device names guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/610/mig-device-names.html).
-Production per-instance utilization should come from
-[DCGM Exporter](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html);
-AgentEval's `nvidia-smi` sample remains a lightweight admission signal rather than a monitoring
-replacement. Prometheus device gauges include `partition` and `mig_profile` labels.
+Production per-instance utilization can come directly from
+[DCGM Exporter](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html).
+Set `AECONTROL_DCGM_EXPORTER_URL` to its `/metrics` endpoint; AgentEval parses the Prometheus
+exposition and maps framebuffer, utilization, temperature, and power gauges to the discovered device.
+For MIG, NVIDIA's Kubernetes mapping supplies a `pod` label and `GPU_I_PROFILE`; the worker defaults
+the pod selector to its hostname and can override it with `AECONTROL_DCGM_POD_NAME`.
+
+```bash
+AECONTROL_DCGM_EXPORTER_URL=http://127.0.0.1:9400/metrics \
+AECONTROL_DCGM_TIMEOUT_SECONDS=1 \
+uv run aecontrol hardware --json
+```
+
+The scrape has a 0.1-10 second timeout and a 2 MiB response limit. Basic-auth credentials may be
+embedded in the operator-owned URL but are stripped from requests and sent as an authorization
+header; `aecontrol doctor` reports only the destination host. An unreachable endpoint, malformed
+exposition, conflicting entity samples, or ambiguous MIG mapping clears live telemetry. This makes
+jobs with live constraints ineligible while retaining static CUDA capability discovery.
+`DCGM_FI_DEV_GPU_UTIL` is preferred for utilization; MIG samples may use
+`DCGM_FI_PROF_GR_ENGINE_ACTIVE`, which is converted from a 0-1 ratio to percent. Prometheus device
+gauges include `partition`, `mig_profile`, and telemetry-source labels.
 
 `minimum_gpu_memory_mb` describes the device's static framebuffer capacity;
 `minimum_gpu_memory_available_mb` describes live headroom calculated from total minus used memory.
@@ -138,7 +155,8 @@ power gauges using stable worker, GPU index, UUID, and model labels. Available f
 exported directly using the same clamped calculation as admission. A sample timestamp accompanies each
 device so alerting rules can reject stale worker telemetry.
 
-Load-aware admission uses the worker's fresh pre-claim `nvidia-smi` sample. It reduces avoidable
-contention but is not a reservation: GPU load can change between sampling and process startup.
+Load-aware admission uses the worker's fresh pre-claim `nvidia-smi` or DCGM Exporter sample. It
+reduces avoidable contention but is not a reservation: GPU load can change between sampling and
+process startup.
 Production GPU sharing should pair this signal with Kubernetes/NVIDIA device isolation and
 runtime-level memory controls.

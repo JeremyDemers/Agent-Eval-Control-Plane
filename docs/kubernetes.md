@@ -27,7 +27,7 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.33.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.34.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
@@ -50,6 +50,14 @@ The included PostgreSQL instance is for portfolio and development clusters. Prod
 should use a managed PostgreSQL service, external secret management, network policies, TLS ingress,
 autoscaling, and a dedicated storage class. GPU nodes must have NVIDIA drivers and the NVIDIA device
 plugin installed; the manifests do not install cluster-level GPU operators.
+
+The GPU and MIG workers consume the GPU Operator's DCGM Exporter service at
+`nvidia-dcgm-exporter.gpu-operator.svc.cluster.local:9400`. Change
+`AECONTROL_DCGM_EXPORTER_URL` when the operator uses another namespace or service name. Enable the
+exporter's Kubernetes mapping so samples contain workload `pod` labels; the worker uses its hostname
+as the default selector and fails live placement constraints closed when the endpoint or mapping is
+unavailable. NetworkPolicy must permit worker egress to TCP 9400. `aecontrol doctor` prints the
+sanitized destination and timeout for rollout checks.
 
 For a managed database, place the provider URL and TLS parameters in the existing database Secret.
 Pool limits apply per process, so budget the sum across API, CPU, GPU, and MIG replicas. Pooling is
@@ -76,9 +84,10 @@ cannot be claimed by the full-GPU worker or the `1g.10gb` pool. Adjust `workers.
 MIG geometry differs.
 
 See NVIDIA's [GPU Operator MIG documentation](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-operator-mig.html)
-for operator installation, mixed-strategy resources, node labels, and geometry management. Use
-[DCGM Exporter](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html) for
-production per-instance telemetry.
+for operator installation, mixed-strategy resources, node labels, and geometry management. The
+overlay configures
+[DCGM Exporter](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html) as
+the per-instance admission telemetry source. The exporter remains owned by NVIDIA GPU Operator.
 
 ## Queue-Aware Autoscaling
 
