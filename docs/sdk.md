@@ -32,8 +32,9 @@ guardrail = client.check_guardrails(
 
 `AsyncAgentEvalClient` provides matching coroutine methods and uses non-blocking polling for terminal
 job state. Both clients support health and operational snapshots, direct evaluations, job listing,
-placement diagnostics, GPU queue capacity forecasts, artifact-integrity audits and cancellation, run retrieval, comparison
-creation/retrieval, and durable NeMo Guardrails evidence workflows.
+placement diagnostics, sample-qualified GPU queue capacity forecasts, artifact-integrity audits and
+cancellation, run retrieval, comparison creation/retrieval, and durable NeMo Guardrails evidence
+workflows.
 
 The default HTTP transport accepts only absolute HTTP(S) URLs, supports caller-generated request IDs,
 normalizes structured API and connection failures into `AgentEvalAPIError`, and rejects malformed JSON

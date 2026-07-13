@@ -390,6 +390,19 @@ def jobs_capacity(
         f"capacity: {forecast.active_cuda_workers} active workers, "
         f"{forecast.active_gpus} GPUs, {forecast.available_gpu_memory_mb} MiB available"
     )
+    if forecast.estimated_clearance_seconds is None:
+        console.print("historical ETA: unavailable (more matching duration samples required)")
+    else:
+        console.print(
+            f"historical ETA: {forecast.estimated_clearance_seconds:.1f}s "
+            f"confidence={forecast.estimate_confidence}"
+        )
+    for estimate in forecast.duration_estimates:
+        profile = estimate.mig_profile or "all-cuda"
+        console.print(
+            f"- history {profile}: n={estimate.sample_count} "
+            f"average={estimate.average_seconds:.1f}s p90={estimate.p90_seconds:.1f}s"
+        )
     for job in forecast.jobs:
         worker = f" worker={job.assigned_worker_id}" if job.assigned_worker_id else ""
         console.print(

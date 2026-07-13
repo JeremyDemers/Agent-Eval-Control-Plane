@@ -1,6 +1,7 @@
 from aecontrol.models import (
     GpuCapacityForecast,
     GpuDevice,
+    GpuDurationEstimate,
     OperationalSnapshot,
     WorkerCapabilities,
     WorkerRecord,
@@ -64,6 +65,16 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
         deferred_jobs=2,
         blocked_jobs=1,
         minimum_clearance_waves=3,
+        estimated_clearance_seconds=270,
+        estimate_confidence="high",
+        duration_estimates=[
+            GpuDurationEstimate(
+                mig_profile="3g.40gb",
+                sample_count=12,
+                average_seconds=70,
+                p90_seconds=90,
+            )
+        ],
         jobs=[],
     )
     payload = render_prometheus(snapshot, [worker], capacity)
@@ -91,3 +102,8 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
     assert 'aecontrol_gpu_queue_jobs{state="blocked"} 1' in payload
     assert "aecontrol_gpu_queue_clearance_waves 3" in payload
     assert "aecontrol_gpu_active_workers 1" in payload
+    assert "aecontrol_gpu_queue_estimated_clearance_seconds 270.000000" in payload
+    assert 'aecontrol_gpu_queue_estimate_confidence{level="high"} 1' in payload
+    assert 'aecontrol_gpu_queue_estimate_confidence{level="low"} 0' in payload
+    assert 'aecontrol_gpu_job_duration_samples{mig_profile="3g.40gb"} 12' in payload
+    assert 'mig_profile="3g.40gb",quantile="p90"} 90.000000' in payload

@@ -313,6 +313,7 @@ class EvaluationJob(BaseModel):
     max_attempts: int = Field(default=3, ge=1, le=10)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+    started_at: datetime | None = None
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
     run_id: UUID | None = None
@@ -412,6 +413,18 @@ class GpuQueueJobForecast(BaseModel):
     blockers: list[str] = Field(default_factory=list)
 
 
+class GpuDurationEstimate(BaseModel):
+    mig_profile: str | None = Field(default=None, pattern=MIG_PROFILE_PATTERN)
+    sample_count: int = Field(ge=1)
+    average_seconds: float = Field(gt=0)
+    p90_seconds: float = Field(gt=0)
+
+    @field_validator("mig_profile", mode="before")
+    @classmethod
+    def normalize_estimate_mig_profile(cls, value: str | None) -> str | None:
+        return normalize_mig_profile(value) if value is not None else None
+
+
 class GpuCapacityForecast(BaseModel):
     observed_at: datetime
     active_worker_window_seconds: int = Field(gt=0)
@@ -427,6 +440,9 @@ class GpuCapacityForecast(BaseModel):
     deferred_jobs: int = Field(ge=0)
     blocked_jobs: int = Field(ge=0)
     minimum_clearance_waves: int = Field(ge=0)
+    estimated_clearance_seconds: float | None = Field(default=None, ge=0)
+    estimate_confidence: Literal["unavailable", "low", "high"] = "unavailable"
+    duration_estimates: list[GpuDurationEstimate] = Field(default_factory=list)
     jobs: list[GpuQueueJobForecast]
 
 

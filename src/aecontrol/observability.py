@@ -50,8 +50,42 @@ def render_prometheus(
                 "# HELP aecontrol_gpu_active_workers Active CUDA worker scheduling slots.",
                 "# TYPE aecontrol_gpu_active_workers gauge",
                 f"aecontrol_gpu_active_workers {gpu_capacity.active_cuda_workers}",
+                "# HELP aecontrol_gpu_queue_estimated_clearance_seconds Historical p90 estimate for compatible CUDA queue clearance.",
+                "# TYPE aecontrol_gpu_queue_estimated_clearance_seconds gauge",
+                "# HELP aecontrol_gpu_queue_estimate_confidence Historical queue estimate confidence by fixed level.",
+                "# TYPE aecontrol_gpu_queue_estimate_confidence gauge",
             ]
         )
+        if gpu_capacity.estimated_clearance_seconds is not None:
+            lines.append(
+                "aecontrol_gpu_queue_estimated_clearance_seconds "
+                f"{gpu_capacity.estimated_clearance_seconds:.6f}"
+            )
+        for level in ("unavailable", "low", "high"):
+            value = int(gpu_capacity.estimate_confidence == level)
+            lines.append(f'aecontrol_gpu_queue_estimate_confidence{{level="{level}"}} {value}')
+        lines.extend(
+            [
+                "# HELP aecontrol_gpu_job_duration_seconds Historical completed CUDA attempt duration by request class.",
+                "# TYPE aecontrol_gpu_job_duration_seconds gauge",
+                "# HELP aecontrol_gpu_job_duration_samples Completed CUDA attempts in each duration estimate.",
+                "# TYPE aecontrol_gpu_job_duration_samples gauge",
+            ]
+        )
+        for estimate in gpu_capacity.duration_estimates:
+            profile = _escape_label(estimate.mig_profile or "all")
+            lines.append(
+                f'aecontrol_gpu_job_duration_seconds{{mig_profile="{profile}",quantile="average"}} '
+                f"{estimate.average_seconds:.6f}"
+            )
+            lines.append(
+                f'aecontrol_gpu_job_duration_seconds{{mig_profile="{profile}",quantile="p90"}} '
+                f"{estimate.p90_seconds:.6f}"
+            )
+            lines.append(
+                f'aecontrol_gpu_job_duration_samples{{mig_profile="{profile}"}} '
+                f"{estimate.sample_count}"
+            )
     lines.extend(
         [
             "# HELP aecontrol_gate_decisions Persisted gate decisions by outcome.",

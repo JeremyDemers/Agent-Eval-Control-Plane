@@ -69,6 +69,7 @@
 - Priority-preserving CUDA queue forecasts with exact static clearance-wave matching.
 - Exact NVIDIA MIG profile admission across PostgreSQL, API, CLI, SDK, diagnostics, capacity
   forecasting, Prometheus telemetry, and a GPU Operator mixed-strategy Kubernetes overlay.
+- Historical CUDA/MIG duration aggregation with p90 queue clearance ETA and sample-based confidence.
 
 ## Verification
 

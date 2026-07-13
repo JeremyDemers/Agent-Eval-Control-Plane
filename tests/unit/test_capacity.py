@@ -9,6 +9,7 @@ from aecontrol.models import (
     Accelerator,
     EvaluationJob,
     GpuDevice,
+    GpuDurationEstimate,
     JobStatus,
     WorkerCapabilities,
     WorkerRecord,
@@ -125,6 +126,38 @@ def test_forecast_handles_no_compatible_gpu_capacity() -> None:
     assert forecast.first_wave_jobs == 0
     assert forecast.blocked_jobs == 1
     assert forecast.minimum_clearance_waves == 0
+    assert forecast.estimated_clearance_seconds is None
+    assert forecast.estimate_confidence == "unavailable"
+
+
+def test_forecast_estimates_clearance_from_profile_history() -> None:
+    workers = [_worker("h100", 81920, 1000, 10)]
+    generic = _job(10, 16000)
+    mig = EvaluationJob(
+        suite_path="suite.yaml",
+        agent_version="nim/mig",
+        priority=5,
+        required_accelerator=Accelerator.CUDA,
+        required_mig_profile="3g.40gb",
+    )
+    workers[0].capabilities.gpus[0].mig_profile = "3g.40gb"
+    estimates = [
+        GpuDurationEstimate(mig_profile=None, sample_count=12, average_seconds=40, p90_seconds=60),
+        GpuDurationEstimate(
+            mig_profile="3g.40gb", sample_count=4, average_seconds=70, p90_seconds=90
+        ),
+    ]
+
+    forecast = forecast_gpu_capacity([generic, mig], workers, now=NOW, duration_estimates=estimates)
+
+    assert forecast.minimum_clearance_waves == 2
+    assert forecast.estimated_clearance_seconds == 180
+    assert forecast.estimate_confidence == "low"
+    assert forecast.duration_estimates == estimates
+
+    unavailable = forecast_gpu_capacity([mig], workers, now=NOW, duration_estimates=estimates[:1])
+    assert unavailable.estimated_clearance_seconds is None
+    assert unavailable.estimate_confidence == "unavailable"
 
 
 def test_forecast_rejects_invalid_active_window() -> None:

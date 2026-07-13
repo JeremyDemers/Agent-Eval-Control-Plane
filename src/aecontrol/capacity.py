@@ -9,6 +9,7 @@ from aecontrol.models import (
     Accelerator,
     EvaluationJob,
     GpuCapacityForecast,
+    GpuDurationEstimate,
     GpuQueueJobForecast,
     JobStatus,
     WorkerRecord,
@@ -22,6 +23,7 @@ def forecast_gpu_capacity(
     *,
     now: datetime | None = None,
     active_within_seconds: int = DEFAULT_WORKER_ACTIVE_SECONDS,
+    duration_estimates: list[GpuDurationEstimate] | None = None,
 ) -> GpuCapacityForecast:
     if active_within_seconds <= 0:
         raise ValueError("active worker window must be positive")
@@ -67,6 +69,24 @@ def forecast_gpu_capacity(
     minimum_clearance_waves = _minimum_clearance_waves(
         [job.job_id for job in compatible_jobs], eligible_workers
     )
+    estimates = duration_estimates or []
+    estimates_by_profile = {item.mig_profile: item for item in estimates}
+    selected_estimates = [
+        estimates_by_profile.get(job.required_mig_profile) for job in compatible_jobs
+    ]
+    has_complete_history = bool(selected_estimates) and all(
+        item is not None for item in selected_estimates
+    )
+    estimated_clearance_seconds: float | None = None
+    estimate_confidence: Literal["unavailable", "low", "high"] = "unavailable"
+    if has_complete_history:
+        complete_estimates = [item for item in selected_estimates if item is not None]
+        estimated_clearance_seconds = (
+            max(item.p90_seconds for item in complete_estimates) * minimum_clearance_waves
+        )
+        estimate_confidence = (
+            "high" if min(item.sample_count for item in complete_estimates) >= 10 else "low"
+        )
 
     job_forecasts: list[GpuQueueJobForecast] = []
     for job in queued_jobs:
@@ -114,6 +134,9 @@ def forecast_gpu_capacity(
         deferred_jobs=sum(item.state == "deferred" for item in job_forecasts),
         blocked_jobs=sum(item.state == "blocked" for item in job_forecasts),
         minimum_clearance_waves=minimum_clearance_waves,
+        estimated_clearance_seconds=estimated_clearance_seconds,
+        estimate_confidence=estimate_confidence,
+        duration_estimates=estimates,
         jobs=job_forecasts,
     )
 
