@@ -60,6 +60,20 @@ def test_openai_compatible_cli_commands(monkeypatch) -> None:  # type: ignore[no
     assert '"id": "test-model"' in payload.output
 
 
+def test_nim_cli_commands(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    async def models(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return [CompatibleModel(id="meta/llama-test")]
+
+    monkeypatch.setenv("NIM_BASE_URL", "http://nim.local/v1")
+    monkeypatch.setattr("aecontrol.cli.NIMClient.models", models)
+    runner = CliRunner()
+    doctor = runner.invoke(app, ["nim", "doctor"])
+    payload = runner.invoke(app, ["nim", "models", "--json"])
+    assert doctor.exit_code == 0
+    assert "NVIDIA NIM" in doctor.output
+    assert '"id": "meta/llama-test"' in payload.output
+
+
 def test_auth_cli_hashes_and_validates_configuration(tmp_path: Path) -> None:
     runner = CliRunner()
     hashed = runner.invoke(app, ["auth", "hash-key", "--secret", "test-secret"])

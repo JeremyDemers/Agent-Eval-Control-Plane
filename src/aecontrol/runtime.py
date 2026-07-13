@@ -14,6 +14,7 @@ from aecontrol.models import (
     Message,
     TrajectoryStep,
 )
+from aecontrol.nim import NIMClient, parse_nim_agent_version
 from aecontrol.ollama import OllamaClient, OllamaError, parse_ollama_agent_version
 from aecontrol.openai_compatible import (
     OpenAICompatibleClient,
@@ -36,10 +37,12 @@ class DeterministicCodingRuntime:
         sandbox: CodingSandbox | None = None,
         ollama_client: OllamaClient | None = None,
         openai_client: OpenAICompatibleClient | None = None,
+        nim_client: NIMClient | None = None,
     ) -> None:
         self._sandbox = sandbox or CodingSandbox()
         self._ollama = ollama_client or OllamaClient()
         self._openai = openai_client or OpenAICompatibleClient()
+        self._nim = nim_client
 
     async def execute(self, request: AgentInput, context: RuntimeContext) -> AgentOutput:
         started = time.perf_counter()
@@ -56,7 +59,8 @@ class DeterministicCodingRuntime:
         runtime_metadata: dict[str, object] = {"provider": "deterministic"}
         ollama_model = parse_ollama_agent_version(context.agent_version)
         openai_model = parse_openai_agent_version(context.agent_version)
-        if ollama_model is None and openai_model is None:
+        nim_model = parse_nim_agent_version(context.agent_version)
+        if ollama_model is None and openai_model is None and nim_model is None:
             agent = get_coding_agent(context.agent_version)
             patched = agent.repair(case)
         elif ollama_model is not None:
@@ -96,14 +100,15 @@ class DeterministicCodingRuntime:
                 )
             )
         else:
-            assert openai_model is not None
+            model = nim_model or openai_model
+            assert model is not None
+            provider = "nvidia-nim" if nim_model is not None else "openai-compatible"
             trajectory.steps.append(
-                TrajectoryStep(
-                    kind="tool_call", data={"name": "model_generate", "model": openai_model}
-                )
+                TrajectoryStep(kind="tool_call", data={"name": "model_generate", "model": model})
             )
             try:
-                compatible_repair = await self._openai.repair(openai_model, case)
+                client = (self._nim or NIMClient()) if nim_model is not None else self._openai
+                compatible_repair = await client.repair(model, case)
             except (OpenAICompatibleError, ValueError) as error:
                 trajectory.steps.append(
                     TrajectoryStep(
@@ -123,8 +128,8 @@ class DeterministicCodingRuntime:
                     status=ExecutionStatus.ERROR,
                     error=ExecutionError(error_type=type(error).__name__, message=str(error)),
                     runtime_metadata={
-                        "provider": "openai-compatible",
-                        "model": openai_model,
+                        "provider": provider,
+                        "model": model,
                     },
                 )
             patched = compatible_repair.source
@@ -132,7 +137,7 @@ class DeterministicCodingRuntime:
             trajectory.steps.append(
                 TrajectoryStep(
                     kind="tool_result",
-                    data={"name": "model_generate", "ok": True, "model": openai_model},
+                    data={"name": "model_generate", "ok": True, "model": model},
                 )
             )
         result = self._sandbox.run(case, patched)

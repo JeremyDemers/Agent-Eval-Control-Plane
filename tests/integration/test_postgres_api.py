@@ -345,6 +345,9 @@ def test_capability_aware_job_placement(api_client: TestClient) -> None:
     compatible_job = store.enqueue_job("examples/suites/coding_repair.yaml", "openai/test-model")
     assert compatible_job.required_labels == {"runtime": "openai-compatible"}
     store.cancel_job(compatible_job.job_id)
+    nim_job = store.enqueue_job("examples/suites/coding_repair.yaml", "nim/meta/llama-test")
+    assert nim_job.required_labels == {"runtime": "nvidia-nim"}
+    store.cancel_job(nim_job.job_id)
 
 
 def test_gpu_resource_constraints_are_atomically_admitted(api_client: TestClient) -> None:
