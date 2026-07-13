@@ -229,6 +229,7 @@ def test_local_trust_uses_deployment_tenant(
 def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
     schema = f"test_{uuid4().hex}"
     role = f"tenant_test_{uuid4().hex}"
+    role_password = uuid4().hex
     auth_config = tmp_path / "tenant-auth.yaml"
     auth_config.write_text(
         "keys:\n"
@@ -239,14 +240,18 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
     )
     with psycopg.connect(database_url, autocommit=True) as connection:
         database = connection.info.dbname
-        connection.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))
+        connection.execute(
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                sql.Identifier(role), sql.Literal(role_password)
+            )
+        )
         connection.execute(
             sql.SQL("GRANT CREATE ON DATABASE {} TO {}").format(
                 sql.Identifier(database), sql.Identifier(role)
             )
         )
 
-    tenant_database_url = make_conninfo(database_url, user=role)
+    tenant_database_url = make_conninfo(database_url, user=role, password=role_password)
     configuration = DatabaseRuntimeConfiguration(
         pool_min_size=1,
         pool_max_size=1,
