@@ -210,8 +210,20 @@ def test_cloudnative_pg_pitr_uses_plugin_backups_and_bounded_retention() -> None
         "scheduled-backup.yaml",
     ]
     assert kustomization["images"][0]["newTag"] == project["project"]["version"]
-    assert "barman-cloud.cloudnative-pg.io" in kustomization["patches"][0]["patch"]
-    assert "isWALArchiver: true" in kustomization["patches"][0]["patch"]
+    plugin_patch = yaml.safe_load(kustomization["patches"][0]["patch"])
+    assert plugin_patch == [
+        {
+            "op": "add",
+            "path": "/spec/plugins",
+            "value": [
+                {
+                    "name": "barman-cloud.cloudnative-pg.io",
+                    "isWALArchiver": True,
+                    "parameters": {"barmanObjectName": "aecontrol-postgres-backup"},
+                }
+            ],
+        }
+    ]
 
     object_store = yaml.safe_load((root / "object-store.yaml").read_text())
     assert object_store["apiVersion"] == "barmancloud.cnpg.io/v1"
