@@ -17,11 +17,24 @@ spec:
       containers:
         - name: worker
           image: ghcr.io/jeremydemers/agent-eval-control-plane
-          command: [uv, run, aecontrol, worker, --lease-seconds, "120", --label, pool=kubernetes]
+          command:
+            - uv
+            - run
+            - aecontrol
+            - worker
+            - --lease-seconds
+            - "120"
+            - --label
+            - pool=kubernetes
+            - --label
+            - runtime=nvidia-nim
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: database-url}
+            - name: NVIDIA_API_KEY
+              valueFrom:
+                secretKeyRef: {name: aecontrol-database, key: nvidia-api-key}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}

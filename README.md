@@ -196,7 +196,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.18.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.19.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -263,6 +263,20 @@ make openai-demo
 See [`docs/openai-compatible.md`](docs/openai-compatible.md) for endpoint configuration and the limits
 of the checked compatibility claim.
 
+## NVIDIA NIM Runtime
+
+The first-class `nim/` runtime supports hosted NVIDIA API Catalog and self-hosted NIM endpoints with
+NVIDIA credential precedence, model discovery, management metadata, structured coding repairs, and
+durable `runtime=nvidia-nim` worker placement.
+
+```bash
+NVIDIA_API_KEY=nvapi-... uv run aecontrol nim doctor
+uv run aecontrol nim models
+```
+
+See [`docs/nvidia-nim.md`](docs/nvidia-nim.md) for hosted and self-hosted configuration, provenance,
+and credential boundaries.
+
 ## Scoped API Authentication
 
 Production-style bearer authentication can be enabled without changing the zero-configuration local
@@ -287,14 +301,14 @@ uv run aecontrol store verify
 curl http://127.0.0.1:8000/api/v1/integrity
 ```
 
-Schema v3 backfills existing PostgreSQL artifacts in place. See
+Schema v4 backfills existing PostgreSQL artifacts and adds durable trace correlation in place. See
 [`docs/artifact-integrity.md`](docs/artifact-integrity.md) for the threat model and signature limits.
 
 ## Current Limitations
 
 The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
-hardened isolation for untrusted code. Managed Kubernetes operators, hosted LLM runtimes, object
-storage, NeMo/LangGraph adapters, and production observability remain in `docs/roadmap.md`.
+hardened isolation for untrusted code. Managed Kubernetes operators, additional hosted providers,
+object storage, NeMo/LangGraph adapters, and production observability remain in `docs/roadmap.md`.
 
 ## Project Governance
 

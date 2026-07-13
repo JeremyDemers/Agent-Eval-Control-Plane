@@ -428,6 +428,10 @@ class ArtifactStore:
                 raise ValueError(
                     "OpenAI-compatible jobs require the runtime=openai-compatible label"
                 )
+        if agent_version.startswith("nim/"):
+            runtime_label = effective_labels.setdefault("runtime", "nvidia-nim")
+            if runtime_label != "nvidia-nim":
+                raise ValueError("NVIDIA NIM jobs require the runtime=nvidia-nim label")
         job = EvaluationJob(
             suite_path=suite_path,
             agent_version=agent_version,

@@ -38,12 +38,14 @@ class OpenAICompatibleClient:
         base_url: str | None = None,
         api_key: str | None = None,
         timeout_seconds: float = 120,
+        provider: str = "openai-compatible",
     ) -> None:
         self.base_url = (
             base_url or os.getenv("OPENAI_COMPAT_BASE_URL") or DEFAULT_BASE_URL
         ).rstrip("/")
         self.api_key = api_key or os.getenv("OPENAI_COMPAT_API_KEY") or "ollama"
         self.timeout_seconds = timeout_seconds
+        self.provider = provider
 
     async def models(self) -> list[CompatibleModel]:
         payload = await asyncio.to_thread(self._request, "GET", "/models", None)
@@ -78,7 +80,7 @@ class OpenAICompatibleClient:
         return CompatibleRepair(
             source=repair.source,
             metadata={
-                "provider": "openai-compatible",
+                "provider": self.provider,
                 "model": response.get("model", model),
                 "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
                 "prompt_tokens": usage.get("prompt_tokens"),

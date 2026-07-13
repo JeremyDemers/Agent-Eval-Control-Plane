@@ -24,6 +24,7 @@ from aecontrol.gate import evaluate_gate, load_policy
 from aecontrol.hardware import detect_worker_capabilities
 from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, EvaluationRun, GateOutcome, JobStatus, RunComparison
+from aecontrol.nim import NIMClient
 from aecontrol.ollama import OllamaClient, OllamaError
 from aecontrol.openai_compatible import OpenAICompatibleClient, OpenAICompatibleError
 from aecontrol.reports import render_html
@@ -38,6 +39,7 @@ store_app = typer.Typer(help="PostgreSQL artifact store commands")
 jobs_app = typer.Typer(help="Durable evaluation job commands")
 ollama_app = typer.Typer(help="Ollama provider commands")
 openai_app = typer.Typer(help="OpenAI-compatible provider commands")
+nim_app = typer.Typer(help="NVIDIA NIM provider commands")
 auth_app = typer.Typer(help="API authentication commands")
 app.add_typer(datasets_app, name="datasets")
 app.add_typer(suites_app, name="suites")
@@ -47,6 +49,7 @@ app.add_typer(store_app, name="store")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(ollama_app, name="ollama")
 app.add_typer(openai_app, name="openai")
+app.add_typer(nim_app, name="nim")
 app.add_typer(auth_app, name="auth")
 console = Console()
 
@@ -444,6 +447,45 @@ def openai_models(json_output: bool = typer.Option(False, "--json")) -> None:
         return
     for model in models:
         console.print(model.id)
+
+
+@nim_app.command("doctor")
+def nim_doctor() -> None:
+    """Verify NVIDIA NIM credentials, endpoint reachability, and model discovery."""
+    try:
+        client = NIMClient()
+        models = asyncio.run(client.models())
+    except (OpenAICompatibleError, ValueError) as error:
+        console.print(f"[red]unavailable[/red] {error}")
+        raise typer.Exit(1) from error
+    console.print(f"[green]healthy[/green] NVIDIA NIM, models={len(models)}")
+
+
+@nim_app.command("models")
+def nim_models(json_output: bool = typer.Option(False, "--json")) -> None:
+    """List models exposed by the configured NVIDIA NIM endpoint."""
+    try:
+        models = asyncio.run(NIMClient().models())
+    except (OpenAICompatibleError, ValueError) as error:
+        console.print(f"[red]unavailable[/red] {error}")
+        raise typer.Exit(1) from error
+    if json_output:
+        console.print(json.dumps([model.model_dump() for model in models], indent=2))
+        return
+    for model in models:
+        console.print(model.id)
+
+
+@nim_app.command("metadata")
+def nim_metadata() -> None:
+    """Read self-hosted NIM deployment metadata and version information."""
+    try:
+        client = NIMClient()
+        metadata, deployment_version = asyncio.run(client.deployment_info())
+    except (OpenAICompatibleError, ValueError) as error:
+        console.print(f"[red]unavailable[/red] {error}")
+        raise typer.Exit(1) from error
+    console.print(json.dumps({"metadata": metadata, "version": deployment_version}, indent=2))
 
 
 @app.command()

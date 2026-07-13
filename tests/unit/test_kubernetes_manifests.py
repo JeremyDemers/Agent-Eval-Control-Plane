@@ -41,6 +41,8 @@ def test_kubernetes_workloads_enforce_operational_contracts() -> None:
         container = pod_spec["containers"][0]
         assert container["securityContext"]["allowPrivilegeEscalation"] is False
         assert container["securityContext"]["capabilities"]["drop"] == ["ALL"]
+    cpu = by_name[("Deployment", "cpu-worker")]["spec"]["template"]["spec"]["containers"][0]
+    assert "runtime=nvidia-nim" in cpu["command"]
 
     gpu_spec = by_name[("Deployment", "gpu-worker")]["spec"]["template"]["spec"]
     gpu = gpu_spec["containers"][0]
@@ -62,6 +64,7 @@ def test_kustomization_pins_release_image_and_secret_is_not_committed() -> None:
     assert "secret.example.yaml" not in kustomization["resources"]
     secret = yaml.safe_load((MANIFEST_ROOT / "secret.example.yaml").read_text())
     assert secret["stringData"]["password"] == "replace-me"
+    assert secret["stringData"]["nvidia-api-key"] == "replace-me"
 
 
 def test_keda_overlay_scales_cpu_and_gpu_queues_independently() -> None:
