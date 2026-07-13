@@ -21,7 +21,13 @@ During rotation, retain old keys in `artifact-signing-keys`, change `artifact-si
 restart every workload before verifying the store. A production cluster should source these values
 from an external secret manager rather than committing key material.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.31.0`. Tagged releases publish
+API, CPU worker, full-GPU worker, and MIG worker pods run as non-root with Kubernetes
+`RuntimeDefault` seccomp confinement. Every application container disables privilege escalation and
+drops all Linux capabilities. Cluster policy should enforce these fields at admission and apply a
+tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
+syscall controls.
+
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.32.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 

@@ -78,6 +78,8 @@
   mapped tool evidence, bounded redacted capture, deterministic demo, and real-library contracts.
 - Batched OpenTelemetry OTLP/HTTP export with exact W3C parent continuity, fail-soft local logging,
   sanitized diagnostics, and API/worker lifecycle flushing.
+- Digest-enforced Podman image selection, optional seccomp/AppArmor profiles, hardened full-GPU pod
+  defaults, safe diagnostics, and a real immutable-image sandbox demo.
 
 ## Verification
 
@@ -101,5 +103,5 @@
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
-- Kubernetes database/operator integration, hardened worker isolation, additional hosted providers,
+- Kubernetes database/operator integration, VM-grade worker isolation, additional hosted providers,
   and multi-tenancy remain on the roadmap.

@@ -7,12 +7,44 @@ CPU time, address space, file size, open descriptors, and child processes.
 
 The optional rootless Podman backend adds a read-only workspace mount, disabled networking, dropped
 Linux capabilities, `no-new-privileges`, an unprivileged UID, and container memory, CPU, and PID
-limits. Select it with `AECONTROL_SANDBOX_BACKEND=podman`; each run records the selected backend.
+limits. Podman applies its runtime-default seccomp profile unless an operator supplies a custom one.
+Select the backend with `AECONTROL_SANDBOX_BACKEND=podman`; each run records the selected backend.
+
+## Production Container Policy
+
+Production workers can fail closed unless the sandbox image uses an exact SHA-256 repository digest:
+
+```bash
+podman pull python:3.12-slim
+export AECONTROL_SANDBOX_BACKEND=podman
+export AECONTROL_SANDBOX_IMAGE="$(podman image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"
+export AECONTROL_SANDBOX_REQUIRE_DIGEST=true
+uv run aecontrol doctor
+```
+
+The executor always uses `--pull=never`, so a digest-pinned image must already exist in local
+container storage. This separates image promotion from untrusted-code execution and prevents a tag
+from resolving to new content between evaluations. Invalid references, malformed digest values, and
+unpinned images in required mode are rejected before Podman starts.
+
+Operators may layer host-installed kernel policies onto the runtime default:
+
+```bash
+export AECONTROL_SANDBOX_SECCOMP_PROFILE=/etc/aecontrol/sandbox-seccomp.json
+export AECONTROL_SANDBOX_APPARMOR_PROFILE=aecontrol-sandbox
+```
+
+The seccomp value must resolve to a readable regular file. The AppArmor name is syntax checked, and
+`unconfined` is explicitly rejected. AgentEval passes these controls as `security-opt` arguments;
+the host administrator remains responsible for installing, testing, and updating profiles compatible
+with Python and the container runtime. `aecontrol doctor` reports whether digest pinning is required
+and whether runtime-default or custom policies are active.
 
 Static validation is defense in depth, not a proof of safety. The process backend shares the host
 kernel and should only be used for trusted deterministic fixtures. Model-generated or third-party code
 should use the Podman backend. A production deployment should additionally use a dedicated worker
-node, pinned sandbox image digest, seccomp/AppArmor policy, and stronger VM or microVM isolation.
+node and stronger VM or microVM isolation when candidate code is actively hostile. Containers share
+the host kernel even with digest, namespace, capability, seccomp, and AppArmor controls.
 
 The API binds to `127.0.0.1` by default and assumes a trusted local operator. Evaluation requests
 accept local suite and policy paths, so the service must not be exposed to untrusted networks in this
@@ -29,8 +61,8 @@ and a dedicated hardened worker boundary.
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. As of the v0.15.0
-post-release audit, no known runtime dependency vulnerabilities were reported.
+development-only tools so its result describes the shipped runtime environment. The v0.32.0
+release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults
 to the repository's `examples/` directory. Resolved symlinks outside that root are excluded. Requests
