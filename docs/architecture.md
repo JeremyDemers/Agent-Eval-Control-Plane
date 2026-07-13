@@ -38,3 +38,7 @@ lease and retry history.
 Operational health, readiness, and Prometheus metrics are derived from the same transactional tables
 as scheduling decisions. Request IDs and server timing connect API calls to structured logs without
 placing model prompts, patches, or high-cardinality artifact identifiers in metric labels.
+W3C trace context is persisted with queued work, allowing the API server span and asynchronous worker
+consumer span to remain in one trace. A process-local backend keeps JSON logging as the default and
+can activate a batched OpenTelemetry OTLP/HTTP exporter entirely through standard environment
+configuration.

@@ -56,7 +56,12 @@ from aecontrol.models import (
 )
 from aecontrol.observability import render_prometheus
 from aecontrol.store import ArtifactStore
-from aecontrol.tracing import new_trace, span
+from aecontrol.telemetry import (
+    configure_telemetry_from_environment,
+    record_http_response,
+    shutdown_telemetry,
+)
+from aecontrol.tracing import span
 
 DEFAULT_DATABASE_URL = "postgresql://aecontrol@127.0.0.1:55432/aecontrol"
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -137,9 +142,13 @@ def create_app(
     require_admin = authenticator.require("admin")
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        store.initialize()
-        yield
+    async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
+        lifespan_app.state.telemetry = configure_telemetry_from_environment()
+        try:
+            store.initialize()
+            yield
+        finally:
+            shutdown_telemetry()
 
     application = FastAPI(
         title="AgentEval Control Plane",
@@ -162,20 +171,19 @@ def create_app(
             if REQUEST_ID_PATTERN.fullmatch(supplied_request_id)
             else str(uuid4())
         )
-        trace = new_trace(request.headers.get("traceparent"))
         request.state.request_id = request_id
-        request.state.traceparent = trace.traceparent
         started = time.perf_counter()
         response_status = 500
         try:
             with span(
                 "http.request",
-                trace.traceparent,
+                request.headers.get("traceparent"),
                 method=request.method,
                 path=request.url.path,
             ) as request_span:
                 request.state.traceparent = request_span.traceparent
                 response = await call_next(request)
+                record_http_response(response.status_code)
             response_status = response.status_code
             response.headers["X-Request-ID"] = request_id
             response.headers["traceparent"] = request.state.traceparent

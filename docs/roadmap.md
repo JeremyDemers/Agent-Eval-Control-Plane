@@ -32,10 +32,11 @@ Implemented ahead of the original four-day scope:
 - Immutable NeMo Guardrails bundle versions, append-only activation history, and evidence provenance
 - Supervised NeMo Guardrails policy efficacy with per-version confusion matrices and bounded trends
 - LangGraph v2 runtime interoperability with graph-node, subgraph, tool, and failure evidence
+- Batched OpenTelemetry OTLP/HTTP trace export across API and durable worker boundaries
 
 Next stages:
 
 - Pinned sandbox images with seccomp/AppArmor and microVM isolation
 - Production database/operator integration and seasonal GPU demand prediction
 - Additional hosted provider authentication and endpoint-specific adapters
-- Multi-tenancy, immutable object storage, KMS/asymmetric attestations, and external telemetry backends
+- Multi-tenancy, immutable object storage, and KMS/asymmetric attestations

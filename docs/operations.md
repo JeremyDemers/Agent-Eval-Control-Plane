@@ -27,6 +27,11 @@ preserved when it contains at most 64 alphanumeric, dot, underscore, or hyphen c
 the service generates a UUID. Structured request logs include that ID, method, path, status, and
 duration for correlation without recording request bodies or model prompts.
 
+W3C trace context connects API server spans to worker consumer spans through the durable job record.
+When an OTLP endpoint is configured, both process types batch spans through the OpenTelemetry SDK and
+flush them during normal shutdown. `aecontrol doctor` exposes the active mode and sanitized collector
+hostname. See [`distributed-tracing.md`](distributed-tracing.md) for configuration and data limits.
+
 ```bash
 curl -i http://127.0.0.1:8000/readyz
 curl -H 'X-Request-ID: release-check-42' http://127.0.0.1:8000/api/v1/operations
