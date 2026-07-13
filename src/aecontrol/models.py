@@ -277,7 +277,7 @@ class StoredComparisonSummary(BaseModel):
 
 
 class ArtifactIntegrityItem(BaseModel):
-    artifact_type: Literal["run", "comparison"]
+    artifact_type: Literal["run", "comparison", "guardrail_evidence"]
     artifact_id: UUID
     valid: bool
     expected_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")

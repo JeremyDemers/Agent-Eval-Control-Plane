@@ -22,7 +22,7 @@ Implemented ahead of the original four-day scope:
 - Kubernetes API and CPU/NVIDIA worker deployment with GHCR release images
 - Queue-aware KEDA scaling for CPU and NVIDIA workers
 - First-class NVIDIA NIM runtime for hosted and self-hosted endpoints
-- Typed NeMo Guardrails input/output evidence and activated-rail diagnostics
+- Durable, tamper-evident NeMo Guardrails checks across REST and sync/async SDKs
 
 Next stages:
 

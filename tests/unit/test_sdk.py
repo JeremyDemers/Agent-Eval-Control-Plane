@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from aecontrol.guardrails import GuardrailEvidence, StoredGuardrailEvidence
 from aecontrol.models import EvaluationJob, JobStatus
 from aecontrol.sdk import (
     AgentEvalAPIError,
@@ -136,6 +137,44 @@ def test_client_collections_operations_and_cancellation() -> None:
     assert client.verify_artifacts().valid == 2
 
 
+def test_client_guardrail_evidence_workflow() -> None:
+    transport = FakeTransport()
+    artifact = StoredGuardrailEvidence(
+        evidence=GuardrailEvidence(
+            config_id="safety",
+            model="nim/model",
+            submitted_text="candidate",
+            response_text="blocked",
+            passed_through=False,
+        )
+    )
+    payload = artifact.model_dump(mode="json")
+    summary = {
+        "evidence_id": payload["evidence_id"],
+        "created_at": payload["created_at"],
+        "config_id": "safety",
+        "model": "nim/model",
+        "passed_through": False,
+    }
+    transport.add("GET", "/api/v1/guardrails/configs", [{"id": "safety"}])
+    transport.add("POST", "/api/v1/guardrails/check", payload)
+    transport.add("GET", "/api/v1/guardrails/evidence", [summary])
+    transport.add("GET", f"/api/v1/guardrails/evidence/{artifact.evidence_id}", payload)
+    client = AgentEvalClient(transport=transport)
+
+    assert client.guardrail_configs()[0].id == "safety"
+    created = client.check_guardrails("nim/model", "safety", "request", "candidate")
+    assert created.evidence.passed_through is False
+    assert client.list_guardrail_evidence()[0].config_id == "safety"
+    assert client.get_guardrail_evidence(artifact.evidence_id) == artifact
+    assert transport.requests[1][2] == {
+        "model": "nim/model",
+        "config_id": "safety",
+        "input_text": "request",
+        "output_text": "candidate",
+    }
+
+
 def test_wait_validation_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = FakeTransport()
     queued = job_payload(JobStatus.QUEUED)
@@ -175,6 +214,28 @@ async def test_async_client_health_and_collections() -> None:
     assert await client.health() == {"status": "ok"}
     assert await client.list_runs() == []
     assert await client.list_comparisons() == []
+
+
+@pytest.mark.asyncio
+async def test_async_client_guardrail_evidence_workflow() -> None:
+    transport = FakeTransport()
+    artifact = StoredGuardrailEvidence(
+        evidence=GuardrailEvidence(
+            config_id="safety",
+            model="nim/model",
+            submitted_text="candidate",
+            response_text="candidate",
+            passed_through=True,
+        )
+    )
+    payload = artifact.model_dump(mode="json")
+    transport.add("POST", "/api/v1/guardrails/check", payload)
+    transport.add("GET", f"/api/v1/guardrails/evidence/{artifact.evidence_id}", payload)
+    client = AsyncAgentEvalClient(transport=transport)
+
+    created = await client.check_guardrails("nim/model", "safety", "request", "candidate")
+    assert created.evidence.passed_through is True
+    assert await client.get_guardrail_evidence(artifact.evidence_id) == artifact
 
 
 def test_http_transport_validates_url_and_decodes_response(monkeypatch: pytest.MonkeyPatch) -> None:

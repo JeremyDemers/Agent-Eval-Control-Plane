@@ -12,6 +12,7 @@ from psycopg import sql
 
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key
+from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig, GuardrailsError
 from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, GpuDevice, JobStatus, WorkerCapabilities
 from aecontrol.store import ArtifactStore
@@ -48,7 +49,7 @@ def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 4
+        assert store.health()["schema_version"] == 5
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -116,7 +117,7 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 4
+    assert health.json()["schema_version"] == 5
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")
@@ -216,6 +217,91 @@ def test_tampered_artifact_is_reported_and_blocked(api_client: TestClient) -> No
     blocked = api_client.get(f"/api/v1/runs/{run_id}")
     assert blocked.status_code == 409
     assert "failed SHA-256 integrity verification" in blocked.json()["detail"]
+
+
+def test_guardrail_checks_become_tamper_evident_artifacts(
+    api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def configs(_client) -> list[GuardrailsConfig]:  # type: ignore[no-untyped-def]
+        return [GuardrailsConfig(id="content_safety")]
+
+    async def check(_client, **_kwargs) -> GuardrailEvidence:  # type: ignore[no-untyped-def]
+        return GuardrailEvidence(
+            config_id="content_safety",
+            model="meta/llama-3.1-8b-instruct",
+            submitted_text="candidate response",
+            response_text="I cannot help with that request.",
+            passed_through=False,
+            activated_rails=[{"name": "content safety check output"}],
+            stats={"guardrail_generation_duration": 0.17},
+        )
+
+    client_type = type(api_client.app.state.guardrails_client)
+    monkeypatch.setattr(client_type, "configs", configs)
+    monkeypatch.setattr(client_type, "check", check)
+
+    discovered = api_client.get("/api/v1/guardrails/configs")
+    assert discovered.status_code == 200
+    assert discovered.json() == [{"id": "content_safety"}]
+
+    created = api_client.post(
+        "/api/v1/guardrails/check",
+        json={
+            "model": "meta/llama-3.1-8b-instruct",
+            "config_id": "content_safety",
+            "input_text": "user request",
+            "output_text": "candidate response",
+        },
+    )
+    assert created.status_code == 201
+    evidence_id = created.json()["evidence_id"]
+    assert created.json()["evidence"]["passed_through"] is False
+    assert created.json()["evidence"]["activated_rails"][0]["name"] == (
+        "content safety check output"
+    )
+
+    listed = api_client.get("/api/v1/guardrails/evidence")
+    assert listed.status_code == 200
+    assert listed.json()[0]["evidence_id"] == evidence_id
+    assert listed.json()[0]["config_id"] == "content_safety"
+    assert api_client.get(f"/api/v1/guardrails/evidence/{evidence_id}").status_code == 200
+
+    integrity = api_client.get("/api/v1/integrity")
+    assert integrity.json() == {"checked": 1, "valid": 1, "failures": []}
+
+    store: ArtifactStore = api_client.app.state.store
+    with psycopg.connect(store.database_url) as connection:
+        connection.execute(
+            sql.SQL(
+                "UPDATE {}.guardrail_evidence "
+                "SET payload = jsonb_set(payload, '{{evidence,response_text}}', %s::jsonb) "
+                "WHERE evidence_id = %s"
+            ).format(sql.Identifier(store.schema)),
+            ('"tampered"', evidence_id),
+        )
+
+    report = api_client.get("/api/v1/integrity").json()
+    assert report["valid"] == 0
+    assert report["failures"][0]["artifact_type"] == "guardrail_evidence"
+    blocked = api_client.get(f"/api/v1/guardrails/evidence/{evidence_id}")
+    assert blocked.status_code == 409
+    assert "failed SHA-256 integrity verification" in blocked.json()["detail"]
+    assert api_client.get(f"/api/v1/guardrails/evidence/{uuid4()}").status_code == 404
+
+
+def test_guardrail_upstream_errors_are_actionable(
+    api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def unavailable(_client, **_kwargs) -> GuardrailEvidence:  # type: ignore[no-untyped-def]
+        raise GuardrailsError("NeMo Guardrails request failed: service unavailable")
+
+    monkeypatch.setattr(type(api_client.app.state.guardrails_client), "check", unavailable)
+    response = api_client.post(
+        "/api/v1/guardrails/check",
+        json={"model": "model", "config_id": "config", "input_text": "request"},
+    )
+    assert response.status_code == 502
+    assert response.json()["detail"].endswith("service unavailable")
 
 
 def test_api_returns_actionable_not_found_responses(api_client: TestClient) -> None:

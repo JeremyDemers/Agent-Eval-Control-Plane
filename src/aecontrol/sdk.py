@@ -11,6 +11,11 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from uuid import UUID
 
+from aecontrol.guardrails import (
+    GuardrailsConfig,
+    StoredGuardrailEvidence,
+    StoredGuardrailEvidenceSummary,
+)
 from aecontrol.models import (
     Accelerator,
     ArtifactIntegrityReport,
@@ -101,6 +106,39 @@ class AgentEvalClient:
     def verify_artifacts(self) -> ArtifactIntegrityReport:
         return ArtifactIntegrityReport.model_validate(
             self.transport.request("GET", "/api/v1/integrity")
+        )
+
+    def guardrail_configs(self) -> list[GuardrailsConfig]:
+        payload = self.transport.request("GET", "/api/v1/guardrails/configs")
+        return [GuardrailsConfig.model_validate(item) for item in _list(payload)]
+
+    def check_guardrails(
+        self,
+        model: str,
+        config_id: str,
+        input_text: str,
+        output_text: str | None = None,
+    ) -> StoredGuardrailEvidence:
+        return StoredGuardrailEvidence.model_validate(
+            self.transport.request(
+                "POST",
+                "/api/v1/guardrails/check",
+                {
+                    "model": model,
+                    "config_id": config_id,
+                    "input_text": input_text,
+                    "output_text": output_text,
+                },
+            )
+        )
+
+    def list_guardrail_evidence(self) -> list[StoredGuardrailEvidenceSummary]:
+        payload = self.transport.request("GET", "/api/v1/guardrails/evidence")
+        return [StoredGuardrailEvidenceSummary.model_validate(item) for item in _list(payload)]
+
+    def get_guardrail_evidence(self, evidence_id: UUID) -> StoredGuardrailEvidence:
+        return StoredGuardrailEvidence.model_validate(
+            self.transport.request("GET", f"/api/v1/guardrails/evidence/{evidence_id}")
         )
 
     def enqueue_job(
@@ -214,6 +252,30 @@ class AsyncAgentEvalClient:
 
     async def verify_artifacts(self) -> ArtifactIntegrityReport:
         return await asyncio.to_thread(self._sync.verify_artifacts)
+
+    async def guardrail_configs(self) -> list[GuardrailsConfig]:
+        return await asyncio.to_thread(self._sync.guardrail_configs)
+
+    async def check_guardrails(
+        self,
+        model: str,
+        config_id: str,
+        input_text: str,
+        output_text: str | None = None,
+    ) -> StoredGuardrailEvidence:
+        return await asyncio.to_thread(
+            self._sync.check_guardrails,
+            model,
+            config_id,
+            input_text,
+            output_text,
+        )
+
+    async def list_guardrail_evidence(self) -> list[StoredGuardrailEvidenceSummary]:
+        return await asyncio.to_thread(self._sync.list_guardrail_evidence)
+
+    async def get_guardrail_evidence(self, evidence_id: UUID) -> StoredGuardrailEvidence:
+        return await asyncio.to_thread(self._sync.get_guardrail_evidence, evidence_id)
 
     async def enqueue_job(
         self,

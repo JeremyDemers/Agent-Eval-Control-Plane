@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -22,6 +23,13 @@ from aecontrol.auth import Authenticator, Principal
 from aecontrol.compare import compare_runs
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
+from aecontrol.guardrails import (
+    GuardrailsClient,
+    GuardrailsConfig,
+    GuardrailsError,
+    StoredGuardrailEvidence,
+    StoredGuardrailEvidenceSummary,
+)
 from aecontrol.integrity import ArtifactIntegrityError
 from aecontrol.models import (
     Accelerator,
@@ -69,11 +77,19 @@ class EvaluationJobRequest(BaseModel):
     minimum_cuda_compute_capability: float | None = Field(default=None, ge=1)
 
 
+class GuardrailCheckRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=500)
+    config_id: str = Field(min_length=1, max_length=500)
+    input_text: str = Field(min_length=1, max_length=1_000_000)
+    output_text: str | None = Field(default=None, max_length=1_000_000)
+
+
 def create_app(
     database_url: str | None = None,
     schema: str = "public",
     auth_config: str | Path | None = None,
     input_root: str | Path | None = None,
+    guardrails_client: GuardrailsClient | None = None,
 ) -> FastAPI:
     resolved_database_url = database_url or os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
     resolved_input_root = Path(
@@ -83,6 +99,7 @@ def create_app(
         raise ValueError(f"input root is not a directory: {resolved_input_root}")
     allowed_input_files = _index_input_files(resolved_input_root)
     store = ArtifactStore(resolved_database_url, schema=schema)
+    guardrails = guardrails_client or GuardrailsClient()
     authenticator = Authenticator(auth_config)
     require_read = authenticator.require("read")
     require_write = authenticator.require("write")
@@ -103,6 +120,7 @@ def create_app(
     )
     application.state.store = store
     application.state.authenticator = authenticator
+    application.state.guardrails_client = guardrails
 
     @application.middleware("http")
     async def request_context(request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -186,6 +204,69 @@ def create_app(
     )
     def integrity(_principal: Principal = Depends(require_read)) -> ArtifactIntegrityReport:
         return store.verify_artifacts()
+
+    @application.get(
+        "/api/v1/guardrails/configs",
+        response_model=list[GuardrailsConfig],
+        tags=["guardrails"],
+    )
+    async def guardrail_configs(
+        _principal: Principal = Depends(require_read),
+    ) -> list[GuardrailsConfig]:
+        try:
+            return await guardrails.configs()
+        except GuardrailsError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+    @application.get(
+        "/api/v1/guardrails/evidence",
+        response_model=list[StoredGuardrailEvidenceSummary],
+        tags=["guardrails"],
+    )
+    async def list_guardrail_evidence(
+        limit: int = 100, _principal: Principal = Depends(require_read)
+    ) -> list[StoredGuardrailEvidenceSummary]:
+        if not 1 <= limit <= 500:
+            raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+        return await asyncio.to_thread(store.list_guardrail_evidence, limit)
+
+    @application.post(
+        "/api/v1/guardrails/check",
+        response_model=StoredGuardrailEvidence,
+        status_code=status.HTTP_201_CREATED,
+        tags=["guardrails"],
+    )
+    async def check_guardrails(
+        request: GuardrailCheckRequest,
+        _principal: Principal = Depends(require_write),
+    ) -> StoredGuardrailEvidence:
+        try:
+            evidence = await guardrails.check(
+                model=request.model,
+                config_id=request.config_id,
+                input_text=request.input_text,
+                output_text=request.output_text,
+            )
+        except GuardrailsError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        return await asyncio.to_thread(store.save_guardrail_evidence, evidence)
+
+    @application.get(
+        "/api/v1/guardrails/evidence/{evidence_id}",
+        response_model=StoredGuardrailEvidence,
+        tags=["guardrails"],
+    )
+    async def get_guardrail_evidence(
+        evidence_id: UUID, _principal: Principal = Depends(require_read)
+    ) -> StoredGuardrailEvidence:
+        try:
+            return await asyncio.to_thread(store.get_guardrail_evidence, evidence_id)
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404, detail="guardrail evidence was not found"
+            ) from error
+        except ArtifactIntegrityError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.get("/api/v1/runs", response_model=list[StoredRunSummary], tags=["runs"])
     def list_runs(
