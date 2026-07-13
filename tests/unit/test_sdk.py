@@ -10,7 +10,12 @@ from uuid import uuid4
 
 import pytest
 
-from aecontrol.guardrails import GuardrailEvidence, StoredGuardrailEvidence
+from aecontrol.guardrails import (
+    GuardrailConfigActivation,
+    GuardrailConfigVersion,
+    GuardrailEvidence,
+    StoredGuardrailEvidence,
+)
 from aecontrol.models import Accelerator, EvaluationJob, JobStatus
 from aecontrol.sdk import (
     AgentEvalAPIError,
@@ -226,6 +231,55 @@ def test_client_guardrail_evidence_workflow() -> None:
         "config_id": "safety",
         "input_text": "request",
         "output_text": "candidate",
+        "config_version": None,
+    }
+
+
+def test_client_manages_guardrail_configuration_lifecycle() -> None:
+    transport = FakeTransport()
+    version = GuardrailConfigVersion(
+        config_id="content_safety",
+        version="2026.07.1",
+        bundle_sha256="a" * 64,
+        description="release policy",
+        created_by="administrator",
+    )
+    activation = GuardrailConfigActivation(
+        config_id=version.config_id,
+        version=version.version,
+        bundle_sha256=version.bundle_sha256,
+        activated_by="administrator",
+    )
+    version_payload = version.model_dump(mode="json")
+    activation_payload = activation.model_dump(mode="json")
+    transport.add("GET", "/api/v1/guardrails/config-versions", [version_payload])
+    transport.add("POST", "/api/v1/guardrails/config-versions", version_payload)
+    transport.add(
+        "GET",
+        "/api/v1/guardrails/config-activations?config_id=content_safety",
+        [activation_payload],
+    )
+    transport.add("POST", "/api/v1/guardrails/config-activations", activation_payload)
+    client = AgentEvalClient(transport=transport)
+
+    assert client.guardrail_config_versions() == [version]
+    assert (
+        client.register_guardrail_config_version(
+            "content_safety", "2026.07.1", "a" * 64, "release policy"
+        )
+        == version
+    )
+    assert client.guardrail_config_activations("content_safety") == [activation]
+    assert client.activate_guardrail_config("content_safety", "2026.07.1") == activation
+    assert transport.requests[1][2] == {
+        "config_id": "content_safety",
+        "version": "2026.07.1",
+        "bundle_sha256": "a" * 64,
+        "description": "release policy",
+    }
+    assert transport.requests[3][2] == {
+        "config_id": "content_safety",
+        "version": "2026.07.1",
     }
 
 

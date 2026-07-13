@@ -23,7 +23,7 @@ from aecontrol.compare import compare_runs
 from aecontrol.datasets import validate_jsonl_dataset
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
-from aecontrol.guardrails import GuardrailsClient, GuardrailsError
+from aecontrol.guardrails import GuardrailsClient, GuardrailsError, guardrail_bundle_digest
 from aecontrol.hardware import detect_worker_capabilities
 from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, EvaluationRun, GateOutcome, JobStatus, RunComparison
@@ -572,6 +572,96 @@ def guardrails_configs(json_output: bool = typer.Option(False, "--json")) -> Non
         return
     for config in configs:
         console.print(config.id)
+
+
+@guardrails_app.command("versions")
+def guardrails_versions(
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """List immutable locally registered Guardrails configuration versions."""
+    versions = ArtifactStore(database_url).list_guardrail_config_versions()
+    if json_output:
+        console.print(json.dumps([item.model_dump(mode="json") for item in versions], indent=2))
+        return
+    for item in versions:
+        active = " active" if item.active else ""
+        console.print(
+            f"{item.config_id}@{item.version}{active} sha256={item.bundle_sha256} "
+            f"created_by={item.created_by}"
+        )
+
+
+@guardrails_app.command("digest")
+def guardrails_digest(config_directory: Path) -> None:
+    """Hash a complete NeMo Guardrails configuration directory deterministically."""
+    try:
+        digest = guardrail_bundle_digest(config_directory)
+    except ValueError as error:
+        console.print(f"[red]invalid bundle[/red] {error}")
+        raise typer.Exit(1) from error
+    console.print(digest)
+
+
+@guardrails_app.command("register")
+def guardrails_register(
+    config_id: str = typer.Option(..., "--config"),
+    version: str = typer.Option(..., "--version"),
+    bundle_sha256: str = typer.Option(..., "--bundle-sha256"),
+    description: str = typer.Option("", "--description"),
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+) -> None:
+    """Register an immutable digest for a deployed configuration bundle."""
+    try:
+        registered = ArtifactStore(database_url).register_guardrail_config_version(
+            config_id,
+            version,
+            bundle_sha256,
+            description=description,
+        )
+    except ValueError as error:
+        console.print(f"[red]registration failed[/red] {error}")
+        raise typer.Exit(1) from error
+    console.print(f"registered {registered.config_id}@{registered.version}")
+
+
+@guardrails_app.command("activate")
+def guardrails_activate(
+    config_id: str = typer.Option(..., "--config"),
+    version: str = typer.Option(..., "--version"),
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+) -> None:
+    """Verify upstream discovery and append a configuration activation."""
+    try:
+        configs = asyncio.run(GuardrailsClient().configs())
+        if config_id not in {item.id for item in configs}:
+            raise GuardrailsError(f"NeMo Guardrails is not serving configuration {config_id!r}")
+        activation = ArtifactStore(database_url).activate_guardrail_config(config_id, version)
+    except (GuardrailsError, KeyError) as error:
+        console.print(f"[red]activation failed[/red] {error}")
+        raise typer.Exit(1) from error
+    console.print(
+        f"activated {activation.config_id}@{activation.version} "
+        f"activation={activation.activation_id}"
+    )
+
+
+@guardrails_app.command("activations")
+def guardrails_activations(
+    config_id: str | None = typer.Option(None, "--config"),
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """List append-only activation and rollback history."""
+    activations = ArtifactStore(database_url).list_guardrail_config_activations(config_id)
+    if json_output:
+        console.print(json.dumps([item.model_dump(mode="json") for item in activations], indent=2))
+        return
+    for item in activations:
+        console.print(
+            f"{item.activated_at.isoformat()} {item.config_id}@{item.version} "
+            f"by={item.activated_by} activation={item.activation_id}"
+        )
 
 
 @guardrails_app.command("check")

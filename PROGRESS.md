@@ -70,6 +70,8 @@
 - Exact NVIDIA MIG profile admission across PostgreSQL, API, CLI, SDK, diagnostics, capacity
   forecasting, Prometheus telemetry, and a GPU Operator mixed-strategy Kubernetes overlay.
 - Historical CUDA/MIG duration aggregation with p90 queue clearance ETA and sample-based confidence.
+- Immutable NeMo Guardrails bundle registry, upstream-verified activation, auditable rollback, and
+  version-bound signed evidence.
 
 ## Verification
 
@@ -92,4 +94,5 @@
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
-- Kubernetes database/operator integration, hardened worker isolation, additional hosted providers, multi-tenancy, LangGraph, and deeper NeMo configuration lifecycle support remain on the roadmap.
+- Kubernetes database/operator integration, hardened worker isolation, additional hosted providers,
+  multi-tenancy, LangGraph, and NeMo policy efficacy analysis remain on the roadmap.

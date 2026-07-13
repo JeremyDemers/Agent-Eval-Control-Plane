@@ -12,6 +12,8 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from aecontrol.guardrails import (
+    GuardrailConfigActivation,
+    GuardrailConfigVersion,
     GuardrailsConfig,
     StoredGuardrailEvidence,
     StoredGuardrailEvidenceSummary,
@@ -118,12 +120,55 @@ class AgentEvalClient:
         payload = self.transport.request("GET", "/api/v1/guardrails/configs")
         return [GuardrailsConfig.model_validate(item) for item in _list(payload)]
 
+    def guardrail_config_versions(self) -> list[GuardrailConfigVersion]:
+        payload = self.transport.request("GET", "/api/v1/guardrails/config-versions")
+        return [GuardrailConfigVersion.model_validate(item) for item in _list(payload)]
+
+    def register_guardrail_config_version(
+        self,
+        config_id: str,
+        version: str,
+        bundle_sha256: str,
+        description: str = "",
+    ) -> GuardrailConfigVersion:
+        return GuardrailConfigVersion.model_validate(
+            self.transport.request(
+                "POST",
+                "/api/v1/guardrails/config-versions",
+                {
+                    "config_id": config_id,
+                    "version": version,
+                    "bundle_sha256": bundle_sha256,
+                    "description": description,
+                },
+            )
+        )
+
+    def guardrail_config_activations(
+        self, config_id: str | None = None
+    ) -> list[GuardrailConfigActivation]:
+        path = "/api/v1/guardrails/config-activations"
+        if config_id is not None:
+            path += f"?{urlencode({'config_id': config_id})}"
+        payload = self.transport.request("GET", path)
+        return [GuardrailConfigActivation.model_validate(item) for item in _list(payload)]
+
+    def activate_guardrail_config(self, config_id: str, version: str) -> GuardrailConfigActivation:
+        return GuardrailConfigActivation.model_validate(
+            self.transport.request(
+                "POST",
+                "/api/v1/guardrails/config-activations",
+                {"config_id": config_id, "version": version},
+            )
+        )
+
     def check_guardrails(
         self,
         model: str,
         config_id: str,
         input_text: str,
         output_text: str | None = None,
+        config_version: str | None = None,
     ) -> StoredGuardrailEvidence:
         return StoredGuardrailEvidence.model_validate(
             self.transport.request(
@@ -134,6 +179,7 @@ class AgentEvalClient:
                     "config_id": config_id,
                     "input_text": input_text,
                     "output_text": output_text,
+                    "config_version": config_version,
                 },
             )
         )
@@ -271,12 +317,41 @@ class AsyncAgentEvalClient:
     async def guardrail_configs(self) -> list[GuardrailsConfig]:
         return await asyncio.to_thread(self._sync.guardrail_configs)
 
+    async def guardrail_config_versions(self) -> list[GuardrailConfigVersion]:
+        return await asyncio.to_thread(self._sync.guardrail_config_versions)
+
+    async def register_guardrail_config_version(
+        self,
+        config_id: str,
+        version: str,
+        bundle_sha256: str,
+        description: str = "",
+    ) -> GuardrailConfigVersion:
+        return await asyncio.to_thread(
+            self._sync.register_guardrail_config_version,
+            config_id,
+            version,
+            bundle_sha256,
+            description,
+        )
+
+    async def guardrail_config_activations(
+        self, config_id: str | None = None
+    ) -> list[GuardrailConfigActivation]:
+        return await asyncio.to_thread(self._sync.guardrail_config_activations, config_id)
+
+    async def activate_guardrail_config(
+        self, config_id: str, version: str
+    ) -> GuardrailConfigActivation:
+        return await asyncio.to_thread(self._sync.activate_guardrail_config, config_id, version)
+
     async def check_guardrails(
         self,
         model: str,
         config_id: str,
         input_text: str,
         output_text: str | None = None,
+        config_version: str | None = None,
     ) -> StoredGuardrailEvidence:
         return await asyncio.to_thread(
             self._sync.check_guardrails,
@@ -284,6 +359,7 @@ class AsyncAgentEvalClient:
             config_id,
             input_text,
             output_text,
+            config_version,
         )
 
     async def list_guardrail_evidence(self) -> list[StoredGuardrailEvidenceSummary]:

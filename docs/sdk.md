@@ -36,6 +36,11 @@ placement diagnostics, sample-qualified GPU queue capacity forecasts, artifact-i
 cancellation, run retrieval, comparison creation/retrieval, and durable NeMo Guardrails evidence
 workflows.
 
+Guardrails lifecycle methods include `guardrail_config_versions`,
+`register_guardrail_config_version`, `guardrail_config_activations`, and
+`activate_guardrail_config`. `check_guardrails(..., config_version="2026.07.1")` fails with a conflict
+if that version is no longer active, allowing deployment automation to detect policy drift.
+
 The default HTTP transport accepts only absolute HTTP(S) URLs, supports caller-generated request IDs,
 normalizes structured API and connection failures into `AgentEvalAPIError`, and rejects malformed JSON
 or unexpected response shapes. Tests inject the transport protocol, allowing deterministic lifecycle

@@ -6,7 +6,12 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from aecontrol.cli import _parse_labels, app
-from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig
+from aecontrol.guardrails import (
+    GuardrailConfigActivation,
+    GuardrailConfigVersion,
+    GuardrailEvidence,
+    GuardrailsConfig,
+)
 from aecontrol.models import (
     Accelerator,
     EvaluationJob,
@@ -232,6 +237,92 @@ def test_guardrails_cli_commands(monkeypatch) -> None:  # type: ignore[no-untype
     assert "content_safety" in listed.output
     assert checked.exit_code == 0
     assert '"passed_through": true' in checked.output
+
+
+def test_guardrails_cli_manages_version_activation_and_history(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    version = GuardrailConfigVersion(
+        config_id="content_safety",
+        version="2026.07.1",
+        bundle_sha256="a" * 64,
+        created_by="local-trust",
+        active=True,
+    )
+    activation = GuardrailConfigActivation(
+        config_id=version.config_id,
+        version=version.version,
+        bundle_sha256=version.bundle_sha256,
+        activated_by="local-trust",
+    )
+
+    class Store:
+        def __init__(self, _database_url: str) -> None:
+            pass
+
+        def list_guardrail_config_versions(self):  # type: ignore[no-untyped-def]
+            return [version]
+
+        def register_guardrail_config_version(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return version
+
+        def activate_guardrail_config(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return activation
+
+        def list_guardrail_config_activations(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return [activation]
+
+    async def configs(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return [GuardrailsConfig(id="content_safety")]
+
+    monkeypatch.setattr("aecontrol.cli.ArtifactStore", Store)
+    monkeypatch.setattr("aecontrol.cli.GuardrailsClient.configs", configs)
+    runner = CliRunner()
+
+    listed = runner.invoke(app, ["guardrails", "versions"])
+    registered = runner.invoke(
+        app,
+        [
+            "guardrails",
+            "register",
+            "--config",
+            "content_safety",
+            "--version",
+            "2026.07.1",
+            "--bundle-sha256",
+            "a" * 64,
+        ],
+    )
+    activated = runner.invoke(
+        app,
+        [
+            "guardrails",
+            "activate",
+            "--config",
+            "content_safety",
+            "--version",
+            "2026.07.1",
+        ],
+    )
+    history = runner.invoke(app, ["guardrails", "activations", "--config", "content_safety"])
+
+    assert listed.exit_code == 0
+    assert "content_safety@2026.07.1 active" in listed.output
+    assert registered.exit_code == 0
+    assert "registered content_safety@2026.07.1" in registered.output
+    assert activated.exit_code == 0
+    assert "activated content_safety@2026.07.1" in activated.output
+    assert history.exit_code == 0
+    assert "by=local-trust" in history.output
+
+
+def test_guardrails_cli_digests_configuration_bundle(tmp_path: Path) -> None:
+    config = tmp_path / "content_safety"
+    config.mkdir()
+    (config / "config.yml").write_text("rails: {}\n")
+
+    result = CliRunner().invoke(app, ["guardrails", "digest", str(config)])
+
+    assert result.exit_code == 0
+    assert len(result.output.strip()) == 64
 
 
 def test_auth_cli_hashes_and_validates_configuration(tmp_path: Path) -> None:

@@ -32,13 +32,70 @@ curl http://127.0.0.1:8000/api/v1/guardrails/evidence
 curl http://127.0.0.1:8000/api/v1/guardrails/evidence/EVIDENCE_ID
 ```
 
+## Versioned Configuration Lifecycle
+
+NeMo Guardrails discovers configuration IDs from folders containing `config.yml` or `config.yaml`.
+The folder may also contain Colang flows, prompts, custom actions, initialization code, and knowledge
+base documents. AgentEval schema v10 tracks that complete deployment unit as an immutable local
+version plus a deterministic SHA-256 digest.
+
+```bash
+BUNDLE_SHA=$(uv run aecontrol guardrails digest configs/content_safety)
+uv run aecontrol guardrails register \
+  --config content_safety \
+  --version 2026.07.1 \
+  --bundle-sha256 "$BUNDLE_SHA" \
+  --description "Expanded jailbreak and PII policy"
+
+uv run aecontrol guardrails activate \
+  --config content_safety \
+  --version 2026.07.1
+
+uv run aecontrol guardrails versions
+uv run aecontrol guardrails activations --config content_safety
+```
+
+The digest covers every regular file's relative path, length, and content in stable path order.
+Bundles must contain a root `config.yml` or `config.yaml`; symbolic links are rejected so content
+outside the reviewed directory cannot enter the digest indirectly. A `(config_id, version)` pair can
+be registered only once.
+
+Activation first calls the upstream `/v1/rails/configs` endpoint and refuses a configuration ID that
+is not currently discoverable. Every activation is appended with actor, time, and UUID. Activating a
+previous version performs an auditable rollback without deleting or mutating history.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/guardrails/config-versions \
+  -H "Authorization: Bearer $AECONTROL_ADMIN_KEY" \
+  -H 'Content-Type: application/json' \
+  -d "{\"config_id\":\"content_safety\",\"version\":\"2026.07.1\",\"bundle_sha256\":\"$BUNDLE_SHA\"}"
+
+curl -X POST http://127.0.0.1:8000/api/v1/guardrails/config-activations \
+  -H "Authorization: Bearer $AECONTROL_ADMIN_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"config_id":"content_safety","version":"2026.07.1"}'
+```
+
+New checks automatically bind the active version, bundle digest, and activation ID into the signed
+evidence envelope. Callers may also send `config_version`; a mismatch with the active version returns
+HTTP 409 before inference. When no local version is active, the check remains backward compatible but
+is explicitly marked unmanaged in typed evidence and browser views.
+
+The trust boundary is precise: upstream discovery proves only that the server exposes the registered
+configuration ID. NeMo's list API does not return bundle content or a digest, so the deployment
+pipeline must independently ensure the running folder matches the registered SHA-256. The activation
+record is an operator assertion tied to that verification, not remote attestation of server files.
+See NVIDIA's [configuration structure](https://docs.nvidia.com/nemo/guardrails/configure-guardrails/overview)
+and [configuration discovery API](https://docs.nvidia.com/nemo/guardrails/latest/run-rails/using-fastapi-server/list-guardrail-configs.html).
+
 The browser dashboard includes total checks, intervention rate, and the ten most recent evidence
 records. `/guardrails/evidence/EVIDENCE_ID` renders the submitted text, guardrailed response,
 activated rails, and server statistics. Dynamic values are HTML-escaped, and the detail route uses the
 same digest verification as the REST API before returning content.
 
 When API authentication is enabled, configuration discovery and evidence retrieval require `read`;
-executing and storing a check requires `write`. The synchronous and asynchronous Python SDKs expose
+executing and storing a check requires `write`, while registration and activation require `admin`.
+The synchronous and asynchronous Python SDKs expose
 `guardrail_configs`, `check_guardrails`, `list_guardrail_evidence`, and
 `get_guardrail_evidence` with the same typed contracts.
 
@@ -47,8 +104,9 @@ server statistics, and `passed_through`. Pass-through means the checked text was
 altered or refused response is an intervention. AgentEval does not infer safety from a hard-coded
 refusal phrase or from a rail name.
 
-Schema v5 stores the complete typed envelope as JSONB alongside queryable configuration, model,
-pass-through, and timestamp columns. The canonical payload digest is included in the full
+Schema v5 introduced the complete typed envelope as JSONB alongside queryable configuration, model,
+pass-through, and timestamp columns. Schema v10 adds the optional active version reference. The
+canonical payload digest is included in the full
 `/api/v1/integrity` audit. Detail reads return HTTP 409 without returning the untrusted payload when
 the digest does not match.
 
