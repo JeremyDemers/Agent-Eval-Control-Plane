@@ -50,7 +50,7 @@ def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 9
+        assert store.health()["schema_version"] == 10
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -67,6 +67,8 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
         "    scopes: [read]\n"
         f"  - key_id: operator\n    secret_sha256: {hash_api_key('write-secret')}\n"
         "    scopes: [read, write]\n"
+        f"  - key_id: administrator\n    secret_sha256: {hash_api_key('admin-secret')}\n"
+        "    scopes: [admin]\n"
     )
     try:
         with TestClient(create_app(database_url, schema=schema, auth_config=auth_config)) as client:
@@ -106,6 +108,30 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
             )
             assert queued.status_code == 202
 
+            forbidden_config = client.post(
+                "/api/v1/guardrails/config-versions",
+                headers=operator_headers,
+                json={
+                    "config_id": "content_safety",
+                    "version": "1.0.0",
+                    "bundle_sha256": "a" * 64,
+                },
+            )
+            assert forbidden_config.status_code == 403
+            assert forbidden_config.json() == {"detail": "API key requires the admin scope"}
+
+            admin_config = client.post(
+                "/api/v1/guardrails/config-versions",
+                headers={"Authorization": "Bearer admin-secret"},
+                json={
+                    "config_id": "content_safety",
+                    "version": "1.0.0",
+                    "bundle_sha256": "a" * 64,
+                },
+            )
+            assert admin_config.status_code == 201
+            assert admin_config.json()["created_by"] == "administrator"
+
             security = client.get("/openapi.json").json()["components"]["securitySchemes"]
             assert security["ControlPlaneAPIKey"]["scheme"] == "bearer"
     finally:
@@ -118,7 +144,7 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 9
+    assert health.json()["schema_version"] == 10
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")
@@ -341,6 +367,58 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
     assert discovered.status_code == 200
     assert discovered.json() == [{"id": "content_safety"}]
 
+    undiscoverable = api_client.post(
+        "/api/v1/guardrails/config-activations",
+        json={"config_id": "missing_policy", "version": "1.0.0"},
+    )
+    assert undiscoverable.status_code == 409
+    assert "is not serving" in undiscoverable.json()["detail"]
+
+    for version, digest in (("2026.07.1", "1" * 64), ("2026.07.2", "2" * 64)):
+        registered = api_client.post(
+            "/api/v1/guardrails/config-versions",
+            json={
+                "config_id": "content_safety",
+                "version": version,
+                "bundle_sha256": digest,
+                "description": f"policy {version}",
+            },
+        )
+        assert registered.status_code == 201
+        assert registered.json()["active"] is False
+        assert registered.json()["created_by"] == "local-trust"
+
+    duplicate = api_client.post(
+        "/api/v1/guardrails/config-versions",
+        json={
+            "config_id": "content_safety",
+            "version": "2026.07.1",
+            "bundle_sha256": "f" * 64,
+        },
+    )
+    assert duplicate.status_code == 409
+    assert "already registered" in duplicate.json()["detail"]
+
+    unregistered = api_client.post(
+        "/api/v1/guardrails/config-activations",
+        json={"config_id": "content_safety", "version": "2099.01.1"},
+    )
+    assert unregistered.status_code == 404
+
+    activated_v1 = api_client.post(
+        "/api/v1/guardrails/config-activations",
+        json={"config_id": "content_safety", "version": "2026.07.1"},
+    )
+    assert activated_v1.status_code == 201
+    assert activated_v1.json()["bundle_sha256"] == "1" * 64
+    activation_v1 = activated_v1.json()["activation_id"]
+
+    versions = api_client.get("/api/v1/guardrails/config-versions").json()
+    assert {item["version"]: item["active"] for item in versions} == {
+        "2026.07.1": True,
+        "2026.07.2": False,
+    }
+
     created = api_client.post(
         "/api/v1/guardrails/check",
         json={
@@ -348,6 +426,7 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
             "config_id": "content_safety",
             "input_text": "user request",
             "output_text": "candidate response",
+            "config_version": "2026.07.1",
         },
     )
     assert created.status_code == 201
@@ -356,11 +435,42 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
     assert created.json()["evidence"]["activated_rails"][0]["name"] == (
         "content safety check output"
     )
+    assert created.json()["evidence"]["config_version"] == "2026.07.1"
+    assert created.json()["evidence"]["config_bundle_sha256"] == "1" * 64
+    assert created.json()["evidence"]["config_activation_id"] == activation_v1
+
+    activated_v2 = api_client.post(
+        "/api/v1/guardrails/config-activations",
+        json={"config_id": "content_safety", "version": "2026.07.2"},
+    )
+    assert activated_v2.status_code == 201
+    stale_check = api_client.post(
+        "/api/v1/guardrails/check",
+        json={
+            "model": "meta/llama-3.1-8b-instruct",
+            "config_id": "content_safety",
+            "config_version": "2026.07.1",
+            "input_text": "user request",
+        },
+    )
+    assert stale_check.status_code == 409
+    assert "is not active" in stale_check.json()["detail"]
+
+    rollback = api_client.post(
+        "/api/v1/guardrails/config-activations",
+        json={"config_id": "content_safety", "version": "2026.07.1"},
+    )
+    assert rollback.status_code == 201
+    history = api_client.get(
+        "/api/v1/guardrails/config-activations?config_id=content_safety"
+    ).json()
+    assert [item["version"] for item in history] == ["2026.07.1", "2026.07.2", "2026.07.1"]
 
     listed = api_client.get("/api/v1/guardrails/evidence")
     assert listed.status_code == 200
     assert listed.json()[0]["evidence_id"] == evidence_id
     assert listed.json()[0]["config_id"] == "content_safety"
+    assert listed.json()[0]["config_version"] == "2026.07.1"
     assert api_client.get(f"/api/v1/guardrails/evidence/{evidence_id}").status_code == 200
 
     operations = api_client.get("/api/v1/operations").json()
@@ -374,7 +484,7 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
     assert dashboard.status_code == 200
     assert "Safety Evidence" in dashboard.text
     assert "Intervention rate<b>100.0%" in dashboard.text
-    assert "content_safety" in dashboard.text
+    assert "content_safety@2026.07.1" in dashboard.text
     detail = api_client.get(f"/guardrails/evidence/{evidence_id}")
     assert detail.status_code == 200
     assert "Guardrail Check" in detail.text
@@ -383,6 +493,8 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
     assert "<script>alert(1)</script>" not in detail.text
     assert "I cannot help with that request." in detail.text
     assert "content safety check output" in detail.text
+    assert "Bundle SHA-256 " + "1" * 64 in detail.text
+    assert f"Activation {activation_v1}" in detail.text
 
     integrity = api_client.get("/api/v1/integrity")
     assert integrity.json() == {

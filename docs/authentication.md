@@ -38,6 +38,8 @@ The typed synchronous and asynchronous SDK clients accept `api_key=` and also re
 `AECONTROL_API_KEY`, allowing the plaintext credential to remain in the deployment secret provider.
 
 `read` permits API queries, `write` permits evaluation, queue, cancellation, and comparison
-operations, and `admin` satisfies every scope. Keys should be random and rotated through the
+operations, and `admin` satisfies every scope. Guardrails configuration registration and activation
+specifically require `admin`; activation history and version inventory require `read`. Keys should be
+random and rotated through the
 deployment secret manager; the service stores only their digests in memory and never logs bearer
 credentials.

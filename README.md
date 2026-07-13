@@ -231,7 +231,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.27.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.28.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -334,6 +334,19 @@ The browser explorer summarizes safety-check volume and intervention rate, links
 escaped detail views, and refuses to render records that fail digest verification. Prometheus exports
 low-cardinality check and intervention totals without model names, prompts, or evidence IDs.
 
+Schema v10 adds an immutable configuration-version registry and append-only activation history.
+Operators can deterministically hash a complete NeMo configuration directory, register the digest,
+activate it only while the server advertises that configuration ID, roll back by reactivating an older
+version, and bind active version, bundle SHA-256, and activation ID into signed check evidence.
+
+```bash
+BUNDLE_SHA=$(uv run aecontrol guardrails digest configs/content_safety)
+uv run aecontrol guardrails register --config content_safety \
+  --version 2026.07.1 --bundle-sha256 "$BUNDLE_SHA"
+uv run aecontrol guardrails activate --config content_safety --version 2026.07.1
+uv run aecontrol guardrails activations --config content_safety
+```
+
 ![NeMo Guardrails intervention evidence with activated rails and server statistics](docs/assets/guardrail-evidence.png)
 
 See [`docs/nemo-guardrails.md`](docs/nemo-guardrails.md) for evidence semantics and log sensitivity.
@@ -375,8 +388,8 @@ model limits.
 The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
 hardened isolation for untrusted code. The project consumes but does not install or reconfigure NVIDIA
 GPU Operator; production MIG telemetry should be collected with DCGM. Managed database integration,
-additional hosted providers, object storage, deeper NeMo/LangGraph adapters, and multi-tenancy remain
-in `docs/roadmap.md`.
+additional hosted providers, object storage, NeMo policy efficacy analysis, LangGraph adapters, and
+multi-tenancy remain in `docs/roadmap.md`.
 
 ## Project Governance
 

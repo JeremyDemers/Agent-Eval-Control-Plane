@@ -29,11 +29,12 @@ Implemented ahead of the original four-day scope:
 - Priority-preserving GPU queue forecasts with exact static clearance-wave matching
 - Exact NVIDIA MIG profile admission and a GPU Operator mixed-strategy deployment overlay
 - Historical CUDA/MIG duration evidence and sample-qualified GPU queue clearance ETA
+- Immutable NeMo Guardrails bundle versions, append-only activation history, and evidence provenance
 
 Next stages:
 
 - Pinned sandbox images with seccomp/AppArmor and microVM isolation
 - Production database/operator integration and seasonal GPU demand prediction
 - Additional hosted provider authentication and endpoint-specific adapters
-- Deeper NeMo configuration lifecycle and LangGraph interoperability packages
+- NeMo policy efficacy trends and LangGraph interoperability packages
 - Multi-tenancy, immutable object storage, KMS/asymmetric attestations, and external telemetry backends

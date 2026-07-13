@@ -8,11 +8,14 @@ from uuid import UUID
 
 import psycopg
 from psycopg import sql
+from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from aecontrol.capacity import forecast_gpu_capacity
 from aecontrol.guardrails import (
+    GuardrailConfigActivation,
+    GuardrailConfigVersion,
     GuardrailEvidence,
     StoredGuardrailEvidence,
     StoredGuardrailEvidenceSummary,
@@ -44,7 +47,7 @@ from aecontrol.models import (
 )
 from aecontrol.placement import diagnose_placement
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class ArtifactStore:
@@ -169,6 +172,40 @@ class ArtifactStore:
                 "ALTER TABLE guardrail_evidence ADD COLUMN IF NOT EXISTS signature_key_id TEXT"
             )
             connection.execute(
+                "ALTER TABLE guardrail_evidence ADD COLUMN IF NOT EXISTS config_version TEXT"
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS guardrail_config_versions (
+                    config_id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    bundle_sha256 TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    created_by TEXT NOT NULL,
+                    PRIMARY KEY (config_id, version)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS guardrail_config_activations (
+                    activation_sequence BIGSERIAL PRIMARY KEY,
+                    activation_id UUID NOT NULL UNIQUE,
+                    config_id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    activated_at TIMESTAMPTZ NOT NULL,
+                    activated_by TEXT NOT NULL,
+                    FOREIGN KEY (config_id, version)
+                        REFERENCES guardrail_config_versions(config_id, version)
+                )
+                """
+            )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_guardrail_config_activations_latest
+                   ON guardrail_config_activations(config_id, activation_sequence DESC)"""
+            )
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS evaluation_jobs (
                     job_id UUID PRIMARY KEY,
@@ -257,7 +294,7 @@ class ArtifactStore:
                 connection.execute(
                     "INSERT INTO schema_metadata(version) VALUES (%s)", (SCHEMA_VERSION,)
                 )
-            elif int(row["version"]) in {1, 2, 3, 4, 5, 6, 7, 8}:
+            elif int(row["version"]) in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif int(row["version"]) != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {row['version']}"
@@ -398,6 +435,161 @@ class ArtifactStore:
         )
         return StoredComparison.model_validate(row["payload"])
 
+    def register_guardrail_config_version(
+        self,
+        config_id: str,
+        version: str,
+        bundle_sha256: str,
+        *,
+        description: str = "",
+        created_by: str = "local-trust",
+    ) -> GuardrailConfigVersion:
+        config = GuardrailConfigVersion(
+            config_id=config_id,
+            version=version,
+            bundle_sha256=bundle_sha256,
+            description=description,
+            created_by=created_by,
+        )
+        self.initialize()
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO guardrail_config_versions (
+                        config_id, version, bundle_sha256, description, created_at, created_by
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        config.config_id,
+                        config.version,
+                        config.bundle_sha256,
+                        config.description,
+                        config.created_at,
+                        config.created_by,
+                    ),
+                )
+        except UniqueViolation as error:
+            raise ValueError(
+                f"guardrail configuration {config_id}@{version} is already registered"
+            ) from error
+        return config
+
+    def list_guardrail_config_versions(self) -> list[GuardrailConfigVersion]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                WITH latest AS (
+                    SELECT DISTINCT ON (config_id) config_id, version
+                    FROM guardrail_config_activations
+                    ORDER BY config_id, activation_sequence DESC
+                )
+                SELECT versions.*,
+                       coalesce(latest.version = versions.version, false) AS active
+                FROM guardrail_config_versions AS versions
+                LEFT JOIN latest USING (config_id)
+                ORDER BY versions.config_id, versions.created_at DESC, versions.version
+                """
+            ).fetchall()
+        return [GuardrailConfigVersion.model_validate(row) for row in rows]
+
+    def get_guardrail_config_version(self, config_id: str, version: str) -> GuardrailConfigVersion:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT versions.*, coalesce(latest.version = versions.version, false) AS active
+                FROM guardrail_config_versions AS versions
+                LEFT JOIN LATERAL (
+                    SELECT activation.version
+                    FROM guardrail_config_activations AS activation
+                    WHERE activation.config_id = versions.config_id
+                    ORDER BY activation.activation_sequence DESC
+                    LIMIT 1
+                ) AS latest ON true
+                WHERE versions.config_id = %s AND versions.version = %s
+                """,
+                (config_id, version),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"{config_id}@{version}")
+        return GuardrailConfigVersion.model_validate(row)
+
+    def get_active_guardrail_config(self, config_id: str) -> GuardrailConfigActivation | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT activation.activation_id, activation.config_id, activation.version,
+                       versions.bundle_sha256, activation.activated_at, activation.activated_by
+                FROM guardrail_config_activations AS activation
+                JOIN guardrail_config_versions AS versions USING (config_id, version)
+                WHERE activation.config_id = %s
+                ORDER BY activation.activation_sequence DESC
+                LIMIT 1
+                """,
+                (config_id,),
+            ).fetchone()
+        return GuardrailConfigActivation.model_validate(row) if row is not None else None
+
+    def activate_guardrail_config(
+        self, config_id: str, version: str, *, activated_by: str = "local-trust"
+    ) -> GuardrailConfigActivation:
+        self.initialize()
+        with self._connect() as connection:
+            registered = connection.execute(
+                """SELECT bundle_sha256 FROM guardrail_config_versions
+                   WHERE config_id = %s AND version = %s FOR SHARE""",
+                (config_id, version),
+            ).fetchone()
+            if registered is None:
+                raise KeyError(f"{config_id}@{version}")
+            activation = GuardrailConfigActivation(
+                config_id=config_id,
+                version=version,
+                bundle_sha256=str(registered["bundle_sha256"]),
+                activated_by=activated_by,
+            )
+            connection.execute(
+                """
+                INSERT INTO guardrail_config_activations (
+                    activation_id, config_id, version, activated_at, activated_by
+                ) VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    activation.activation_id,
+                    activation.config_id,
+                    activation.version,
+                    activation.activated_at,
+                    activation.activated_by,
+                ),
+            )
+        return activation
+
+    def list_guardrail_config_activations(
+        self, config_id: str | None = None, limit: int = 100
+    ) -> list[GuardrailConfigActivation]:
+        self.initialize()
+        where = sql.SQL("WHERE activation.config_id = %s") if config_id is not None else sql.SQL("")
+        parameters: tuple[object, ...] = (config_id, limit) if config_id is not None else (limit,)
+        with self._connect() as connection:
+            rows = connection.execute(
+                sql.SQL(
+                    """
+                SELECT activation.activation_id, activation.config_id, activation.version,
+                       versions.bundle_sha256, activation.activated_at, activation.activated_by
+                FROM guardrail_config_activations AS activation
+                JOIN guardrail_config_versions AS versions USING (config_id, version)
+                {}
+                ORDER BY activation.activation_sequence DESC
+                LIMIT %s
+                """
+                ).format(where),
+                parameters,
+            ).fetchall()
+        return [GuardrailConfigActivation.model_validate(row) for row in rows]
+
     def save_guardrail_evidence(self, evidence: GuardrailEvidence) -> StoredGuardrailEvidence:
         self.initialize()
         artifact = StoredGuardrailEvidence(evidence=evidence)
@@ -410,14 +602,15 @@ class ArtifactStore:
             connection.execute(
                 """
                 INSERT INTO guardrail_evidence (
-                    evidence_id, created_at, config_id, model, passed_through,
+                    evidence_id, created_at, config_id, config_version, model, passed_through,
                     payload, payload_sha256, signature_key_id, signature_hmac_sha256
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     artifact.evidence_id,
                     artifact.created_at,
                     evidence.config_id,
+                    evidence.config_version,
                     evidence.model,
                     evidence.passed_through,
                     Jsonb(payload),
@@ -453,7 +646,7 @@ class ArtifactStore:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT evidence_id, created_at, config_id, model, passed_through
+                SELECT evidence_id, created_at, config_id, config_version, model, passed_through
                 FROM guardrail_evidence ORDER BY created_at DESC LIMIT %s
                 """,
                 (limit,),

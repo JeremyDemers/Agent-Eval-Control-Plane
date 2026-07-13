@@ -3,8 +3,15 @@ from __future__ import annotations
 from unittest.mock import Mock
 
 import pytest
+from pydantic import ValidationError
 
-from aecontrol.guardrails import GuardrailsClient, GuardrailsError
+from aecontrol.guardrails import (
+    GuardrailConfigVersion,
+    GuardrailEvidence,
+    GuardrailsClient,
+    GuardrailsError,
+    guardrail_bundle_digest,
+)
 
 
 class StubGuardrailsClient(GuardrailsClient):
@@ -75,3 +82,51 @@ def test_guardrails_transport_omits_or_sends_optional_authorization(
         "GET", "/rails/configs", None
     )
     assert opened.call_args.args[0].headers["Authorization"] == "Bearer secret"
+
+
+def test_guardrail_config_versions_validate_immutable_identity() -> None:
+    config = GuardrailConfigVersion(
+        config_id="system/content-safety",
+        version="2026.07.1",
+        bundle_sha256="a" * 64,
+        created_by="release-bot",
+    )
+
+    assert config.active is False
+    with pytest.raises(ValidationError):
+        GuardrailConfigVersion(
+            config_id="content_safety",
+            version="invalid version",
+            bundle_sha256="not-a-digest",
+            created_by="release-bot",
+        )
+
+
+def test_guardrail_bundle_digest_covers_paths_and_content(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    config = tmp_path / "config"
+    rails = config / "rails"
+    rails.mkdir(parents=True)
+    (config / "config.yml").write_text("rails: {}\n")
+    (rails / "input.co").write_text("flow check input\n")
+
+    first = guardrail_bundle_digest(config)
+    assert first == guardrail_bundle_digest(config)
+
+    (rails / "input.co").write_text("flow check output\n")
+    assert guardrail_bundle_digest(config) != first
+
+    (config / "linked.co").symlink_to(rails / "input.co")
+    with pytest.raises(ValueError, match="symbolic links"):
+        guardrail_bundle_digest(config)
+
+
+def test_managed_guardrail_evidence_requires_complete_provenance() -> None:
+    with pytest.raises(ValidationError, match="version, digest, and activation"):
+        GuardrailEvidence(
+            config_id="content_safety",
+            config_version="2026.07.1",
+            model="nim/model",
+            submitted_text="input",
+            response_text="output",
+            passed_through=False,
+        )

@@ -25,6 +25,8 @@ from aecontrol.compare import compare_runs
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
 from aecontrol.guardrails import (
+    GuardrailConfigActivation,
+    GuardrailConfigVersion,
     GuardrailsClient,
     GuardrailsConfig,
     GuardrailsError,
@@ -94,6 +96,19 @@ class GuardrailCheckRequest(BaseModel):
     config_id: str = Field(min_length=1, max_length=500)
     input_text: str = Field(min_length=1, max_length=1_000_000)
     output_text: str | None = Field(default=None, max_length=1_000_000)
+    config_version: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+class GuardrailConfigVersionRequest(BaseModel):
+    config_id: str = Field(min_length=1, max_length=500)
+    version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    bundle_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    description: str = Field(default="", max_length=1000)
+
+
+class GuardrailConfigActivationRequest(BaseModel):
+    config_id: str = Field(min_length=1, max_length=500)
+    version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def create_app(
@@ -116,6 +131,7 @@ def create_app(
     authenticator = Authenticator(auth_config)
     require_read = authenticator.require("read")
     require_write = authenticator.require("write")
+    require_admin = authenticator.require("admin")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -241,6 +257,81 @@ def create_app(
             raise HTTPException(status_code=502, detail=str(error)) from error
 
     @application.get(
+        "/api/v1/guardrails/config-versions",
+        response_model=list[GuardrailConfigVersion],
+        tags=["guardrails"],
+    )
+    async def guardrail_config_versions(
+        _principal: Principal = Depends(require_read),
+    ) -> list[GuardrailConfigVersion]:
+        return await asyncio.to_thread(store.list_guardrail_config_versions)
+
+    @application.post(
+        "/api/v1/guardrails/config-versions",
+        response_model=GuardrailConfigVersion,
+        status_code=status.HTTP_201_CREATED,
+        tags=["guardrails"],
+    )
+    async def register_guardrail_config_version(
+        request: GuardrailConfigVersionRequest,
+        principal: Principal = Depends(require_admin),
+    ) -> GuardrailConfigVersion:
+        try:
+            return await asyncio.to_thread(
+                store.register_guardrail_config_version,
+                request.config_id,
+                request.version,
+                request.bundle_sha256,
+                description=request.description,
+                created_by=principal.key_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.get(
+        "/api/v1/guardrails/config-activations",
+        response_model=list[GuardrailConfigActivation],
+        tags=["guardrails"],
+    )
+    async def guardrail_config_activations(
+        config_id: str | None = None,
+        limit: int = Query(default=100, ge=1, le=500),
+        _principal: Principal = Depends(require_read),
+    ) -> list[GuardrailConfigActivation]:
+        return await asyncio.to_thread(store.list_guardrail_config_activations, config_id, limit)
+
+    @application.post(
+        "/api/v1/guardrails/config-activations",
+        response_model=GuardrailConfigActivation,
+        status_code=status.HTTP_201_CREATED,
+        tags=["guardrails"],
+    )
+    async def activate_guardrail_config(
+        request: GuardrailConfigActivationRequest,
+        principal: Principal = Depends(require_admin),
+    ) -> GuardrailConfigActivation:
+        try:
+            upstream_configs = await guardrails.configs()
+        except GuardrailsError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        if request.config_id not in {item.id for item in upstream_configs}:
+            raise HTTPException(
+                status_code=409,
+                detail=f"NeMo Guardrails is not serving configuration {request.config_id!r}",
+            )
+        try:
+            return await asyncio.to_thread(
+                store.activate_guardrail_config,
+                request.config_id,
+                request.version,
+                activated_by=principal.key_id,
+            )
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404, detail="guardrail configuration version was not found"
+            ) from error
+
+    @application.get(
         "/api/v1/guardrails/evidence",
         response_model=list[StoredGuardrailEvidenceSummary],
         tags=["guardrails"],
@@ -262,6 +353,19 @@ def create_app(
         request: GuardrailCheckRequest,
         _principal: Principal = Depends(require_write),
     ) -> StoredGuardrailEvidence:
+        active_config = await asyncio.to_thread(
+            store.get_active_guardrail_config, request.config_id
+        )
+        if request.config_version is not None and (
+            active_config is None or active_config.version != request.config_version
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"guardrail configuration {request.config_id!r} is not active at "
+                    f"version {request.config_version!r}"
+                ),
+            )
         try:
             evidence = await guardrails.check(
                 model=request.model,
@@ -271,6 +375,14 @@ def create_app(
             )
         except GuardrailsError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+        if active_config is not None:
+            evidence = evidence.model_copy(
+                update={
+                    "config_version": active_config.version,
+                    "config_bundle_sha256": active_config.bundle_sha256,
+                    "config_activation_id": active_config.activation_id,
+                }
+            )
         return await asyncio.to_thread(store.save_guardrail_evidence, evidence)
 
     @application.get(
@@ -611,7 +723,8 @@ def _render_dashboard(
     guardrail_rows = (
         "".join(
             f"<tr><td><a href='/guardrails/evidence/{row.evidence_id}'>{str(row.evidence_id)[:8]}</a></td>"
-            f"<td>{escape(row.config_id)}</td><td>{escape(row.model)}</td>"
+            f"<td>{escape(_guardrail_config_label(row.config_id, row.config_version))}</td>"
+            f"<td>{escape(row.model)}</td>"
             f"<td class='{'passed' if row.passed_through else 'intervened'}'>"
             f"{'Pass-through' if row.passed_through else 'Intervention'}</td>"
             f"<td>{_utc_timestamp(row.created_at)}</td></tr>"
@@ -770,18 +883,29 @@ def _render_guardrail_evidence(artifact: StoredGuardrailEvidence) -> str:
         if isinstance(evidence.activated_rails, (list, dict))
         else int(bool(evidence.activated_rails))
     )
+    config_label = _guardrail_config_label(evidence.config_id, evidence.config_version)
+    provenance = (
+        f"<p class='muted'>Bundle SHA-256 {escape(evidence.config_bundle_sha256)} · "
+        f"Activation {evidence.config_activation_id}</p>"
+        if evidence.config_bundle_sha256 is not None and evidence.config_activation_id is not None
+        else "<p class='muted'>Unmanaged configuration; no local version was active.</p>"
+    )
     return _page(
         f"Guardrail evidence {str(artifact.evidence_id)[:8]}",
         f"""<h1>Guardrail Check <span class="{status_class}">{status_label}</span></h1>
 <p class="muted">Evidence {artifact.evidence_id} · {_utc_timestamp(artifact.created_at)}</p>
-<div class="metrics"><div class="metric">Configuration<b>{escape(evidence.config_id)}</b></div>
+<div class="metrics"><div class="metric">Configuration<b>{escape(config_label)}</b></div>
 <div class="metric">Model<b>{escape(evidence.model)}</b></div>
-<div class="metric">Activated rails<b>{rail_count}</b></div></div>
+<div class="metric">Activated rails<b>{rail_count}</b></div></div>{provenance}
 <h2>Submitted Text</h2><pre>{escape(evidence.submitted_text)}</pre>
 <h2>Guardrailed Response</h2><pre>{escape(evidence.response_text)}</pre>
 <h2>Activated Rails</h2><pre>{escape(activated_rails)}</pre>
 <h2>Server Statistics</h2><pre>{escape(stats)}</pre>""",
     )
+
+
+def _guardrail_config_label(config_id: str, version: str | None) -> str:
+    return f"{config_id}@{version}" if version is not None else f"{config_id} (unmanaged)"
 
 
 app = create_app()
