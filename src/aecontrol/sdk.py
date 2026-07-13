@@ -5,6 +5,7 @@ import json
 import os
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -12,8 +13,10 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from aecontrol.guardrails import (
+    ExpectedGuardrailAction,
     GuardrailConfigActivation,
     GuardrailConfigVersion,
+    GuardrailEfficacyReport,
     GuardrailsConfig,
     StoredGuardrailEvidence,
     StoredGuardrailEvidenceSummary,
@@ -169,6 +172,7 @@ class AgentEvalClient:
         input_text: str,
         output_text: str | None = None,
         config_version: str | None = None,
+        expected_action: ExpectedGuardrailAction | None = None,
     ) -> StoredGuardrailEvidence:
         return StoredGuardrailEvidence.model_validate(
             self.transport.request(
@@ -180,9 +184,33 @@ class AgentEvalClient:
                     "input_text": input_text,
                     "output_text": output_text,
                     "config_version": config_version,
+                    "expected_action": expected_action.value
+                    if expected_action is not None
+                    else None,
                 },
             )
         )
+
+    def guardrail_efficacy(
+        self,
+        *,
+        config_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> GuardrailEfficacyReport:
+        query = {
+            key: value
+            for key, value in {
+                "config_id": config_id,
+                "since": since.isoformat() if since is not None else None,
+                "until": until.isoformat() if until is not None else None,
+            }.items()
+            if value is not None
+        }
+        path = "/api/v1/guardrails/efficacy"
+        if query:
+            path += f"?{urlencode(query)}"
+        return GuardrailEfficacyReport.model_validate(self.transport.request("GET", path))
 
     def list_guardrail_evidence(self) -> list[StoredGuardrailEvidenceSummary]:
         payload = self.transport.request("GET", "/api/v1/guardrails/evidence")
@@ -352,6 +380,7 @@ class AsyncAgentEvalClient:
         input_text: str,
         output_text: str | None = None,
         config_version: str | None = None,
+        expected_action: ExpectedGuardrailAction | None = None,
     ) -> StoredGuardrailEvidence:
         return await asyncio.to_thread(
             self._sync.check_guardrails,
@@ -360,6 +389,21 @@ class AsyncAgentEvalClient:
             input_text,
             output_text,
             config_version,
+            expected_action,
+        )
+
+    async def guardrail_efficacy(
+        self,
+        *,
+        config_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> GuardrailEfficacyReport:
+        return await asyncio.to_thread(
+            self._sync.guardrail_efficacy,
+            config_id=config_id,
+            since=since,
+            until=until,
         )
 
     async def list_guardrail_evidence(self) -> list[StoredGuardrailEvidenceSummary]:

@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html import escape
 from importlib.metadata import version
 from pathlib import Path
@@ -25,8 +25,10 @@ from aecontrol.compare import compare_runs
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
 from aecontrol.guardrails import (
+    ExpectedGuardrailAction,
     GuardrailConfigActivation,
     GuardrailConfigVersion,
+    GuardrailEfficacyReport,
     GuardrailsClient,
     GuardrailsConfig,
     GuardrailsError,
@@ -97,6 +99,7 @@ class GuardrailCheckRequest(BaseModel):
     input_text: str = Field(min_length=1, max_length=1_000_000)
     output_text: str | None = Field(default=None, max_length=1_000_000)
     config_version: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    expected_action: ExpectedGuardrailAction | None = None
 
 
 class GuardrailConfigVersionRequest(BaseModel):
@@ -220,9 +223,13 @@ def create_app(
     @application.get("/metrics", include_in_schema=False)
     def metrics() -> PlainTextResponse:
         workers = store.list_workers()
+        efficacy = store.guardrail_efficacy_report()
         return PlainTextResponse(
             render_prometheus(
-                store.operational_snapshot(), workers, store.gpu_capacity_forecast(workers)
+                store.operational_snapshot(),
+                workers,
+                store.gpu_capacity_forecast(workers),
+                efficacy,
             ),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
@@ -294,7 +301,7 @@ def create_app(
         tags=["guardrails"],
     )
     async def guardrail_config_activations(
-        config_id: str | None = None,
+        config_id: str | None = Query(default=None, min_length=1, max_length=500),
         limit: int = Query(default=100, ge=1, le=500),
         _principal: Principal = Depends(require_read),
     ) -> list[GuardrailConfigActivation]:
@@ -343,6 +350,28 @@ def create_app(
             raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
         return await asyncio.to_thread(store.list_guardrail_evidence, limit)
 
+    @application.get(
+        "/api/v1/guardrails/efficacy",
+        response_model=GuardrailEfficacyReport,
+        tags=["guardrails"],
+    )
+    async def guardrail_efficacy(
+        config_id: str | None = Query(default=None, min_length=1, max_length=500),
+        since: datetime | None = None,
+        until: datetime | None = None,
+        _principal: Principal = Depends(require_read),
+    ) -> GuardrailEfficacyReport:
+        window_start, window_end = _efficacy_window(since, until)
+        try:
+            return await asyncio.to_thread(
+                store.guardrail_efficacy_report,
+                config_id=config_id,
+                window_start=window_start,
+                window_end=window_end,
+            )
+        except ArtifactVerificationError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
     @application.post(
         "/api/v1/guardrails/check",
         response_model=StoredGuardrailEvidence,
@@ -375,14 +404,16 @@ def create_app(
             )
         except GuardrailsError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+        updates: dict[str, object] = {"expected_action": request.expected_action}
         if active_config is not None:
-            evidence = evidence.model_copy(
-                update={
+            updates.update(
+                {
                     "config_version": active_config.version,
                     "config_bundle_sha256": active_config.bundle_sha256,
                     "config_activation_id": active_config.activation_id,
                 }
             )
+        evidence = evidence.model_copy(update=updates)
         return await asyncio.to_thread(store.save_guardrail_evidence, evidence)
 
     @application.get(
@@ -563,6 +594,7 @@ def create_app(
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)
     def dashboard() -> str:
         workers = store.list_workers()
+        efficacy = store.guardrail_efficacy_report()
         return _render_dashboard(
             store.list_runs(),
             store.list_comparisons(),
@@ -571,6 +603,7 @@ def create_app(
             store.list_guardrail_evidence(10),
             store.operational_snapshot(),
             store.gpu_capacity_forecast(workers),
+            efficacy,
         )
 
     @application.get("/runs/{run_id}", response_class=HTMLResponse, include_in_schema=False)
@@ -631,6 +664,18 @@ def _existing_file(value: str, label: str, allowed_files: dict[str, Path]) -> Pa
     return path
 
 
+def _efficacy_window(since: datetime | None, until: datetime | None) -> tuple[datetime, datetime]:
+    window_end = until or datetime.now(UTC)
+    window_start = since or window_end - timedelta(days=30)
+    if window_start.tzinfo is None or window_end.tzinfo is None:
+        raise HTTPException(status_code=422, detail="efficacy timestamps must include a timezone")
+    if window_start >= window_end:
+        raise HTTPException(status_code=422, detail="since must be before until")
+    if window_end - window_start > timedelta(days=366):
+        raise HTTPException(status_code=422, detail="efficacy windows cannot exceed 366 days")
+    return window_start, window_end
+
+
 def _get_run(store: ArtifactStore, run_id: UUID) -> EvaluationRun:
     try:
         return store.get_run(run_id)
@@ -680,6 +725,7 @@ def _render_dashboard(
     guardrail_evidence: list[StoredGuardrailEvidenceSummary],
     snapshot: OperationalSnapshot,
     gpu_capacity: GpuCapacityForecast,
+    efficacy: GuardrailEfficacyReport,
 ) -> str:
     run_rows = (
         "".join(
@@ -732,11 +778,26 @@ def _render_dashboard(
         )
         or "<tr><td colspan='5'>No Guardrails evidence yet.</td></tr>"
     )
+    efficacy_rows = (
+        "".join(
+            f"<tr><td>{escape(_guardrail_config_label(row.config_id, row.config_version))}</td>"
+            f"<td>{row.sample_count}</td><td>{row.labeled_count} ({row.label_coverage:.1%})</td>"
+            f"<td>{row.intervention_rate:.1%}</td><td>{_optional_percent(row.accuracy)}</td>"
+            f"<td>{_optional_percent(row.precision)}</td><td>{_optional_percent(row.recall)}</td>"
+            f"<td>{_optional_percent(row.false_positive_rate)}</td></tr>"
+            for row in efficacy.versions
+        )
+        or "<tr><td colspan='8'>No Guardrails checks in the last 30 days.</td></tr>"
+    )
     active_jobs = sum(row.status in {JobStatus.QUEUED, JobStatus.RUNNING} for row in jobs)
     intervention_rate = (
         snapshot.guardrail_interventions_total / snapshot.guardrail_evidence_total
         if snapshot.guardrail_evidence_total
         else 0
+    )
+    efficacy_correct = sum(row.true_positives + row.true_negatives for row in efficacy.versions)
+    efficacy_accuracy = (
+        efficacy_correct / efficacy.labeled_checks if efficacy.labeled_checks else None
     )
     capacity_rows = (
         "".join(
@@ -760,6 +821,8 @@ def _render_dashboard(
 <div class="metric">Comparisons<b>{len(comparisons)}</b></div>
 <div class="metric">Safety checks<b>{snapshot.guardrail_evidence_total}</b></div>
 <div class="metric">Intervention rate<b>{intervention_rate:.1%}</b></div>
+<div class="metric">Labeled safety checks<b>{efficacy.labeled_checks}/{efficacy.total_checks}</b></div>
+<div class="metric">Policy accuracy<b>{_optional_percent(efficacy_accuracy)}</b></div>
 <div class="metric">GPU first wave<b>{gpu_capacity.first_wave_jobs}/{gpu_capacity.queued_cuda_jobs}</b></div>
 <div class="metric">GPU clearance<b>{gpu_capacity.minimum_clearance_waves} waves</b></div>
 <div class="metric">GPU queue ETA<b>{clearance_eta}</b></div></div>
@@ -768,6 +831,7 @@ def _render_dashboard(
 <h2>Evaluation Queue</h2><table><thead><tr><th>Job</th><th>Agent</th><th>Status</th><th>Requires</th><th>Priority</th><th>Attempts</th><th>Worker</th></tr></thead><tbody>{job_rows}</tbody></table>
 <h2>Recent Runs</h2><table><thead><tr><th>Agent</th><th>Suite</th><th>Cases</th><th>Hidden pass</th><th>Completed</th></tr></thead><tbody>{run_rows}</tbody></table>
 <h2>Release Decisions</h2><table><thead><tr><th>ID</th><th>Gate</th><th>Pairs</th><th>Delta</th><th>Created</th></tr></thead><tbody>{comparison_rows}</tbody></table>
+<h2>Policy Efficacy (30 days)</h2><table><thead><tr><th>Configuration</th><th>Checks</th><th>Labeled</th><th>Intervention Rate</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>False Positive Rate</th></tr></thead><tbody>{efficacy_rows}</tbody></table>
 <h2>Safety Evidence</h2><table><thead><tr><th>ID</th><th>Configuration</th><th>Model</th><th>Result</th><th>Created</th></tr></thead><tbody>{guardrail_rows}</tbody></table>""",
     )
 
@@ -788,6 +852,10 @@ def _gpu_summary(gpu: GpuDevice) -> str:
 
 def _utc_timestamp(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _optional_percent(value: float | None) -> str:
+    return f"{value:.1%}" if value is not None else "not measured"
 
 
 def _job_requirement(job: EvaluationJob) -> str:
@@ -890,12 +958,18 @@ def _render_guardrail_evidence(artifact: StoredGuardrailEvidence) -> str:
         if evidence.config_bundle_sha256 is not None and evidence.config_activation_id is not None
         else "<p class='muted'>Unmanaged configuration; no local version was active.</p>"
     )
+    expectation = (
+        evidence.expected_action.value.replace("_", " ")
+        if evidence.expected_action is not None
+        else "unlabeled"
+    )
     return _page(
         f"Guardrail evidence {str(artifact.evidence_id)[:8]}",
         f"""<h1>Guardrail Check <span class="{status_class}">{status_label}</span></h1>
 <p class="muted">Evidence {artifact.evidence_id} · {_utc_timestamp(artifact.created_at)}</p>
 <div class="metrics"><div class="metric">Configuration<b>{escape(config_label)}</b></div>
 <div class="metric">Model<b>{escape(evidence.model)}</b></div>
+<div class="metric">Expected action<b>{escape(expectation)}</b></div>
 <div class="metric">Activated rails<b>{rail_count}</b></div></div>{provenance}
 <h2>Submitted Text</h2><pre>{escape(evidence.submitted_text)}</pre>
 <h2>Guardrailed Response</h2><pre>{escape(evidence.response_text)}</pre>

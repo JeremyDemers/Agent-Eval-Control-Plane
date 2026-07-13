@@ -1,3 +1,6 @@
+from datetime import UTC, datetime
+
+from aecontrol.guardrails import GuardrailEfficacyMetrics, GuardrailEfficacyReport
 from aecontrol.models import (
     GpuCapacityForecast,
     GpuDevice,
@@ -77,7 +80,33 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
         ],
         jobs=[],
     )
-    payload = render_prometheus(snapshot, [worker], capacity)
+    efficacy = GuardrailEfficacyReport(
+        window_start=datetime(2026, 7, 1, tzinfo=UTC),
+        window_end=datetime(2026, 8, 1, tzinfo=UTC),
+        total_checks=5,
+        labeled_checks=4,
+        versions=[
+            GuardrailEfficacyMetrics(
+                config_id="content_safety",
+                config_version="1.0",
+                sample_count=5,
+                labeled_count=4,
+                pass_through_count=3,
+                intervention_count=2,
+                true_positives=1,
+                false_positives=1,
+                true_negatives=2,
+                false_negatives=0,
+                label_coverage=0.8,
+                intervention_rate=0.4,
+                accuracy=0.75,
+                precision=0.5,
+                recall=1,
+                false_positive_rate=1 / 3,
+            )
+        ],
+    )
+    payload = render_prometheus(snapshot, [worker], capacity, efficacy)
 
     assert "aecontrol_runs_total 3" in payload
     assert "aecontrol_guardrail_evidence_total 4" in payload
@@ -107,3 +136,7 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
     assert 'aecontrol_gpu_queue_estimate_confidence{level="low"} 0' in payload
     assert 'aecontrol_gpu_job_duration_samples{mig_profile="3g.40gb"} 12' in payload
     assert 'mig_profile="3g.40gb",quantile="p90"} 90.000000' in payload
+    assert "aecontrol_guardrail_labeled_checks 4" in payload
+    assert "aecontrol_guardrail_label_coverage 0.800000" in payload
+    assert "aecontrol_guardrail_policy_accuracy 0.750000" in payload
+    assert "aecontrol_guardrail_false_positive_rate 0.333333" in payload

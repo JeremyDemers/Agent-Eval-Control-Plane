@@ -4,7 +4,9 @@ import asyncio
 import hashlib
 import json
 import os
+from collections import defaultdict
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -44,6 +46,11 @@ class GuardrailsConfig(BaseModel):
     id: str
 
 
+class ExpectedGuardrailAction(StrEnum):
+    PASS_THROUGH = "pass_through"
+    INTERVENTION = "intervention"
+
+
 class GuardrailConfigVersion(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -73,6 +80,7 @@ class GuardrailEvidence(BaseModel):
     submitted_text: str
     response_text: str
     passed_through: bool
+    expected_action: ExpectedGuardrailAction | None = None
     config_version: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     config_bundle_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     config_activation_id: UUID | None = None
@@ -108,6 +116,117 @@ class StoredGuardrailEvidenceSummary(BaseModel):
     model: str
     passed_through: bool
     config_version: str | None = None
+    expected_action: ExpectedGuardrailAction | None = None
+
+
+class GuardrailEfficacyMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config_id: str
+    config_version: str | None
+    sample_count: int = Field(ge=0)
+    labeled_count: int = Field(ge=0)
+    pass_through_count: int = Field(ge=0)
+    intervention_count: int = Field(ge=0)
+    true_positives: int = Field(ge=0)
+    false_positives: int = Field(ge=0)
+    true_negatives: int = Field(ge=0)
+    false_negatives: int = Field(ge=0)
+    label_coverage: float = Field(ge=0, le=1)
+    intervention_rate: float = Field(ge=0, le=1)
+    accuracy: float | None = Field(default=None, ge=0, le=1)
+    precision: float | None = Field(default=None, ge=0, le=1)
+    recall: float | None = Field(default=None, ge=0, le=1)
+    false_positive_rate: float | None = Field(default=None, ge=0, le=1)
+
+
+class GuardrailEfficacyReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    window_start: datetime
+    window_end: datetime
+    config_id: str | None = None
+    total_checks: int = Field(ge=0)
+    labeled_checks: int = Field(ge=0)
+    versions: list[GuardrailEfficacyMetrics]
+
+
+def build_guardrail_efficacy_report(
+    artifacts: list[StoredGuardrailEvidence],
+    *,
+    window_start: datetime,
+    window_end: datetime,
+    config_id: str | None = None,
+) -> GuardrailEfficacyReport:
+    grouped: dict[tuple[str, str | None], list[GuardrailEvidence]] = defaultdict(list)
+    for artifact in artifacts:
+        grouped[(artifact.evidence.config_id, artifact.evidence.config_version)].append(
+            artifact.evidence
+        )
+
+    versions: list[GuardrailEfficacyMetrics] = []
+    for (group_config_id, config_version), evidence_items in sorted(
+        grouped.items(), key=lambda item: (item[0][0], item[0][1] or "")
+    ):
+        labeled = [item for item in evidence_items if item.expected_action is not None]
+        interventions = sum(not item.passed_through for item in evidence_items)
+        true_positives = sum(
+            not item.passed_through and item.expected_action == ExpectedGuardrailAction.INTERVENTION
+            for item in labeled
+        )
+        false_positives = sum(
+            not item.passed_through and item.expected_action == ExpectedGuardrailAction.PASS_THROUGH
+            for item in labeled
+        )
+        true_negatives = sum(
+            item.passed_through and item.expected_action == ExpectedGuardrailAction.PASS_THROUGH
+            for item in labeled
+        )
+        false_negatives = sum(
+            item.passed_through and item.expected_action == ExpectedGuardrailAction.INTERVENTION
+            for item in labeled
+        )
+        sample_count = len(evidence_items)
+        labeled_count = len(labeled)
+        versions.append(
+            GuardrailEfficacyMetrics(
+                config_id=group_config_id,
+                config_version=config_version,
+                sample_count=sample_count,
+                labeled_count=labeled_count,
+                pass_through_count=sample_count - interventions,
+                intervention_count=interventions,
+                true_positives=true_positives,
+                false_positives=false_positives,
+                true_negatives=true_negatives,
+                false_negatives=false_negatives,
+                label_coverage=_ratio(labeled_count, sample_count),
+                intervention_rate=_ratio(interventions, sample_count),
+                accuracy=_optional_ratio(true_positives + true_negatives, labeled_count),
+                precision=_optional_ratio(true_positives, true_positives + false_positives),
+                recall=_optional_ratio(true_positives, true_positives + false_negatives),
+                false_positive_rate=_optional_ratio(
+                    false_positives, false_positives + true_negatives
+                ),
+            )
+        )
+    return GuardrailEfficacyReport(
+        window_start=window_start,
+        window_end=window_end,
+        config_id=config_id,
+        total_checks=len(artifacts),
+        labeled_checks=sum(item.labeled_count for item in versions),
+        versions=versions,
+    )
+
+
+def _ratio(numerator: int, denominator: int) -> float:
+    return numerator / denominator if denominator else 0.0
+
+
+def _optional_ratio(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
 
 
 class GuardrailsClient:

@@ -9,6 +9,7 @@ import secrets
 import shutil
 import socket
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -661,6 +662,39 @@ def guardrails_activations(
         console.print(
             f"{item.activated_at.isoformat()} {item.config_id}@{item.version} "
             f"by={item.activated_by} activation={item.activation_id}"
+        )
+
+
+@guardrails_app.command("efficacy")
+def guardrails_efficacy(
+    config_id: str | None = typer.Option(None, "--config"),
+    days: int = typer.Option(30, "--days", min=1, max=366),
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Compare labeled Guardrails policy outcomes by configuration version."""
+    window_end = datetime.now(UTC)
+    report = ArtifactStore(database_url).guardrail_efficacy_report(
+        config_id=config_id,
+        window_start=window_end - timedelta(days=days),
+        window_end=window_end,
+    )
+    if json_output:
+        console.print(report.model_dump_json(indent=2))
+        return
+    console.print(f"checks={report.total_checks} labeled={report.labeled_checks} window={days}d")
+    for item in report.versions:
+        version = item.config_version or "unmanaged"
+        accuracy = f"{item.accuracy:.1%}" if item.accuracy is not None else "not-measured"
+        false_positive_rate = (
+            f"{item.false_positive_rate:.1%}"
+            if item.false_positive_rate is not None
+            else "not-measured"
+        )
+        console.print(
+            f"{item.config_id}@{version} samples={item.sample_count} labeled={item.labeled_count} "
+            f"interventions={item.intervention_rate:.1%} accuracy={accuracy} "
+            f"false-positive-rate={false_positive_rate}"
         )
 
 

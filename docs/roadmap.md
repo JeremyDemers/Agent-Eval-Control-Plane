@@ -30,11 +30,12 @@ Implemented ahead of the original four-day scope:
 - Exact NVIDIA MIG profile admission and a GPU Operator mixed-strategy deployment overlay
 - Historical CUDA/MIG duration evidence and sample-qualified GPU queue clearance ETA
 - Immutable NeMo Guardrails bundle versions, append-only activation history, and evidence provenance
+- Supervised NeMo Guardrails policy efficacy with per-version confusion matrices and bounded trends
 
 Next stages:
 
 - Pinned sandbox images with seccomp/AppArmor and microVM isolation
 - Production database/operator integration and seasonal GPU demand prediction
 - Additional hosted provider authentication and endpoint-specific adapters
-- NeMo policy efficacy trends and LangGraph interoperability packages
+- LangGraph interoperability packages
 - Multi-tenancy, immutable object storage, KMS/asymmetric attestations, and external telemetry backends
