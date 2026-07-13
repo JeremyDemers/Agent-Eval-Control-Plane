@@ -170,6 +170,20 @@ The local Makefile uses native Podman by default because Snap-installed VS Code 
 emulation through a revision-specific `XDG_DATA_HOME`. Set `CONTAINER_ENGINE=docker` if you want to
 force Docker on a host with a healthy Docker daemon.
 
+## Kubernetes
+
+The Kustomize deployment separates the API, CPU workers, and NVIDIA GPU workers. GPU pods request the
+standard `nvidia.com/gpu` extended resource while AgentEval performs its own memory and compute
+capability admission after device discovery.
+
+```bash
+kubectl apply -f /tmp/aecontrol-secret.yaml
+kubectl apply -k deploy/kubernetes
+```
+
+Tagged releases publish a GHCR image with an SBOM and build provenance. See
+[`docs/kubernetes.md`](docs/kubernetes.md) for secret setup, rollout checks, and production boundaries.
+
 ## Release Artifacts
 
 `make package` builds a wheel and source distribution, installs the wheel into a fresh Python 3.12
@@ -181,7 +195,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.16.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.17.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -278,8 +292,8 @@ Schema v3 backfills existing PostgreSQL artifacts in place. See
 ## Current Limitations
 
 The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
-hardened isolation for untrusted code. Kubernetes execution, hosted LLM runtimes, object storage,
-NeMo/LangGraph adapters, and production observability remain in `docs/roadmap.md`.
+hardened isolation for untrusted code. Managed Kubernetes operators, hosted LLM runtimes, object
+storage, NeMo/LangGraph adapters, and production observability remain in `docs/roadmap.md`.
 
 ## Project Governance
 
