@@ -5,6 +5,7 @@ engine, database, and API.
 
 ```python
 from aecontrol import AgentEvalClient
+from aecontrol.models import Accelerator
 
 client = AgentEvalClient("http://127.0.0.1:8000", api_key="your-high-entropy-key")
 job = client.enqueue_job(
@@ -12,6 +13,9 @@ job = client.enqueue_job(
     "candidate_fixed",
     priority=10,
     labels={"runtime": "deterministic"},
+    accelerator=Accelerator.CUDA,
+    minimum_gpu_memory_available_mb=10000,
+    maximum_gpu_utilization_percent=30,
 )
 placement = client.explain_job(job.job_id)
 integrity = client.verify_artifacts()

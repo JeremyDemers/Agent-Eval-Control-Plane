@@ -9,7 +9,8 @@ AgentEval exposes three local operational surfaces backed by PostgreSQL.
 The metrics include persisted run and comparison totals, jobs by lifecycle state, gate outcomes,
 registered and active workers, expired leases, oldest queued-job age, and average completed-job
 latency. Job and gate labels are fixed enums; run IDs and case IDs are deliberately excluded.
-Per-device GPU gauges use bounded worker, device index, UUID, and model labels from the registered
+Per-device GPU capacity, used/available memory, utilization, temperature, and power gauges use bounded
+worker, device index, UUID, and model labels from the registered
 inventory, plus a sample timestamp for staleness detection.
 
 Every HTTP response includes `X-Request-ID` and `Server-Timing`. A caller-supplied request ID is

@@ -28,11 +28,11 @@ inside the atomic lease query: the requested accelerator must be in the worker's
 and worker labels must contain every requested label. An incompatible worker never owns or increments
 the attempt count of a job it cannot execute.
 
-CUDA jobs can also require framebuffer capacity and compute capability. Both constraints must be
-satisfied by the same physical device; capacities from multiple GPUs are never combined. Admission
-remains part of the locked claim query, so underqualified workers leave the job queued without
-consuming an attempt.
-Existing schema-v1 databases are migrated in place to schema v2 when the service initializes.
+CUDA jobs can also require static framebuffer capacity and compute capability, live free framebuffer
+memory, and a maximum utilization percentage. Every requested constraint must be satisfied by the
+same physical device; capacity and load signals from multiple GPUs are never combined. Admission
+remains part of the locked claim query, so underqualified or saturated workers leave the job queued
+without consuming an attempt. Schema v6 adds the load constraints through an in-place migration.
 
 ```bash
 uv run aecontrol jobs enqueue \
@@ -40,12 +40,27 @@ uv run aecontrol jobs enqueue \
   --agent-version candidate_fixed \
   --accelerator cuda \
   --minimum-gpu-memory-mb 12000 \
-  --minimum-cuda-compute-capability 8.9
+  --minimum-cuda-compute-capability 8.9 \
+  --minimum-gpu-memory-available-mb 10000 \
+  --maximum-gpu-utilization-percent 30
 ```
+
+`minimum_gpu_memory_mb` describes the device's static framebuffer capacity;
+`minimum_gpu_memory_available_mb` describes live headroom calculated from total minus used memory.
+When a job requests a live constraint, missing memory-use or utilization telemetry makes that device
+ineligible rather than optimistically treating the sample as idle. Placement diagnostics distinguish
+missing telemetry, insufficient free memory, excessive utilization, and requirements split across
+different devices.
 
 GPU discovery is optional and fail-safe. Missing binaries, timeouts, command failures, and malformed
 device rows result in a CPU-only capability document. No synthetic GPU is reported. Operators can
 inspect discovery with `aecontrol hardware --json`, and the browser dashboard shows registered worker
 inventory and job requirements. `/metrics` exports per-device memory, utilization, temperature, and
-power gauges using stable worker, GPU index, UUID, and model labels. A sample timestamp accompanies
-each device so alerting rules can reject stale worker telemetry.
+power gauges using stable worker, GPU index, UUID, and model labels. Available framebuffer bytes are
+exported directly using the same clamped calculation as admission. A sample timestamp accompanies each
+device so alerting rules can reject stale worker telemetry.
+
+Load-aware admission uses the worker's fresh pre-claim `nvidia-smi` sample. It reduces avoidable
+contention but is not a reservation: GPU load can change between sampling and process startup.
+Production GPU sharing should pair this signal with Kubernetes/NVIDIA device isolation or MIG and
+runtime-level memory controls.

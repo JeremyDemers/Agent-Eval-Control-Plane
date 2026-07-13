@@ -6,4 +6,4 @@ resources:
   - autoscaling.yaml
 images:
   - name: ghcr.io/jeremydemers/agent-eval-control-plane
-    newTag: 0.21.0
+    newTag: 0.22.0

@@ -35,7 +35,7 @@ from aecontrol.models import (
 )
 from aecontrol.placement import diagnose_placement
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class ArtifactStore:
@@ -177,6 +177,14 @@ class ArtifactStore:
                    minimum_cuda_compute_capability DOUBLE PRECISION"""
             )
             connection.execute(
+                """ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS
+                   minimum_gpu_memory_available_mb INTEGER NOT NULL DEFAULT 0"""
+            )
+            connection.execute(
+                """ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS
+                   maximum_gpu_utilization_percent DOUBLE PRECISION"""
+            )
+            connection.execute(
                 "ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS traceparent TEXT"
             )
             connection.execute(
@@ -202,7 +210,7 @@ class ArtifactStore:
                 connection.execute(
                     "INSERT INTO schema_metadata(version) VALUES (%s)", (SCHEMA_VERSION,)
                 )
-            elif int(row["version"]) in {1, 2, 3, 4}:
+            elif int(row["version"]) in {1, 2, 3, 4, 5}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif int(row["version"]) != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {row['version']}"
@@ -494,6 +502,8 @@ class ArtifactStore:
         required_labels: dict[str, str] | None = None,
         minimum_gpu_memory_mb: int = 0,
         minimum_cuda_compute_capability: float | None = None,
+        minimum_gpu_memory_available_mb: int = 0,
+        maximum_gpu_utilization_percent: float | None = None,
         traceparent: str | None = None,
         request_id: str | None = None,
     ) -> EvaluationJob:
@@ -521,6 +531,8 @@ class ArtifactStore:
             required_labels=effective_labels,
             minimum_gpu_memory_mb=minimum_gpu_memory_mb,
             minimum_cuda_compute_capability=minimum_cuda_compute_capability,
+            minimum_gpu_memory_available_mb=minimum_gpu_memory_available_mb,
+            maximum_gpu_utilization_percent=maximum_gpu_utilization_percent,
             traceparent=traceparent,
             request_id=request_id,
         )
@@ -531,8 +543,10 @@ class ArtifactStore:
                 INSERT INTO evaluation_jobs (
                     job_id, suite_path, agent_version, status, priority, attempts,
                     max_attempts, created_at, updated_at, required_accelerator, required_labels,
-                    minimum_gpu_memory_mb, minimum_cuda_compute_capability, traceparent, request_id
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    minimum_gpu_memory_mb, minimum_cuda_compute_capability,
+                    minimum_gpu_memory_available_mb, maximum_gpu_utilization_percent,
+                    traceparent, request_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -549,6 +563,8 @@ class ArtifactStore:
                     Jsonb(job.required_labels),
                     job.minimum_gpu_memory_mb,
                     job.minimum_cuda_compute_capability,
+                    job.minimum_gpu_memory_available_mb,
+                    job.maximum_gpu_utilization_percent,
                     job.traceparent,
                     job.request_id,
                 ),
@@ -593,19 +609,21 @@ class ArtifactStore:
         self.initialize()
         accelerators = [Accelerator.CPU.value]
         labels: dict[str, str] = {}
-        gpu_profiles: list[dict[str, int | float]] = []
+        gpu_profiles: list[dict[str, int | float | None]] = []
         if capabilities is not None:
             accelerators = [item.value for item in capabilities.accelerators]
             labels = capabilities.labels
             for gpu in capabilities.gpus:
                 try:
-                    compute_capability = float(gpu.compute_capability)
+                    compute_capability: float | None = float(gpu.compute_capability)
                 except ValueError:
-                    continue
+                    compute_capability = None
                 gpu_profiles.append(
                     {
                         "memory_total_mb": gpu.memory_total_mb,
+                        "memory_used_mb": gpu.memory_used_mb,
                         "compute_capability": compute_capability,
+                        "utilization_percent": gpu.utilization_percent,
                     }
                 )
         with self._connect() as connection:
@@ -621,15 +639,37 @@ class ArtifactStore:
                         (
                           minimum_gpu_memory_mb = 0
                           AND minimum_cuda_compute_capability IS NULL
+                          AND minimum_gpu_memory_available_mb = 0
+                          AND maximum_gpu_utilization_percent IS NULL
                         )
                         OR EXISTS (
                           SELECT 1
                           FROM jsonb_to_recordset(%s::jsonb)
-                            AS gpu(memory_total_mb INTEGER, compute_capability DOUBLE PRECISION)
+                            AS gpu(
+                              memory_total_mb INTEGER,
+                              memory_used_mb INTEGER,
+                              compute_capability DOUBLE PRECISION,
+                              utilization_percent DOUBLE PRECISION
+                            )
                           WHERE gpu.memory_total_mb >= minimum_gpu_memory_mb
                             AND (
                               minimum_cuda_compute_capability IS NULL
                               OR gpu.compute_capability >= minimum_cuda_compute_capability
+                            )
+                            AND (
+                              minimum_gpu_memory_available_mb = 0
+                              OR (
+                                gpu.memory_used_mb IS NOT NULL
+                                AND greatest(0, gpu.memory_total_mb - gpu.memory_used_mb)
+                                  >= minimum_gpu_memory_available_mb
+                              )
+                            )
+                            AND (
+                              maximum_gpu_utilization_percent IS NULL
+                              OR (
+                                gpu.utilization_percent IS NOT NULL
+                                AND gpu.utilization_percent <= maximum_gpu_utilization_percent
+                              )
                             )
                         )
                       )

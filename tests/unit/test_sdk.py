@@ -11,7 +11,7 @@ from uuid import uuid4
 import pytest
 
 from aecontrol.guardrails import GuardrailEvidence, StoredGuardrailEvidence
-from aecontrol.models import EvaluationJob, JobStatus
+from aecontrol.models import Accelerator, EvaluationJob, JobStatus
 from aecontrol.sdk import (
     AgentEvalAPIError,
     AgentEvalClient,
@@ -55,7 +55,15 @@ def test_sync_client_serializes_and_waits_for_job() -> None:
     )
     client = AgentEvalClient(transport=transport)
 
-    created = client.enqueue_job("suite.yaml", "baseline", priority=7, labels={"pool": "test"})
+    created = client.enqueue_job(
+        "suite.yaml",
+        "baseline",
+        priority=7,
+        labels={"pool": "test"},
+        accelerator=Accelerator.CUDA,
+        minimum_gpu_memory_available_mb=4096,
+        maximum_gpu_utilization_percent=25,
+    )
     completed = client.wait_for_job(created.job_id, poll_seconds=0)
 
     assert completed.status == JobStatus.COMPLETED
@@ -64,10 +72,12 @@ def test_sync_client_serializes_and_waits_for_job() -> None:
         "agent_version": "baseline",
         "priority": 7,
         "max_attempts": 3,
-        "required_accelerator": "cpu",
+        "required_accelerator": "cuda",
         "required_labels": {"pool": "test"},
         "minimum_gpu_memory_mb": 0,
         "minimum_cuda_compute_capability": None,
+        "minimum_gpu_memory_available_mb": 4096,
+        "maximum_gpu_utilization_percent": 25,
     }
 
 

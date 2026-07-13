@@ -76,44 +76,94 @@ def _diagnose_worker(
 
 
 def _gpu_reasons(job: EvaluationJob, gpus: list[GpuDevice]) -> list[str]:
-    if job.minimum_gpu_memory_mb == 0 and job.minimum_cuda_compute_capability is None:
+    load_constrained = (
+        job.minimum_gpu_memory_available_mb > 0 or job.maximum_gpu_utilization_percent is not None
+    )
+    if (
+        job.minimum_gpu_memory_mb == 0
+        and job.minimum_cuda_compute_capability is None
+        and not load_constrained
+    ):
         return []
-    profiles: list[tuple[int, float]] = []
-    for gpu in gpus:
-        memory = gpu.memory_total_mb
-        try:
-            compute = float(gpu.compute_capability)
-        except ValueError:
-            continue
-        profiles.append((memory, compute))
-    if not profiles:
-        return ["no GPU has readable memory and compute capability"]
-    matching = [
-        profile
-        for profile in profiles
-        if profile[0] >= job.minimum_gpu_memory_mb
-        and (
-            job.minimum_cuda_compute_capability is None
-            or profile[1] >= job.minimum_cuda_compute_capability
-        )
-    ]
-    if matching:
+    if not gpus:
+        return ["no GPU telemetry is available"]
+    if any(_gpu_matches(job, gpu) for gpu in gpus):
         return []
+
     reasons: list[str] = []
-    maximum_memory = max(profile[0] for profile in profiles)
-    maximum_compute = max(profile[1] for profile in profiles)
+    maximum_memory = max(gpu.memory_total_mb for gpu in gpus)
     if maximum_memory < job.minimum_gpu_memory_mb:
         reasons.append(
             f"GPU memory requires >= {job.minimum_gpu_memory_mb} MiB, maximum is {maximum_memory} MiB"
         )
-    if (
-        job.minimum_cuda_compute_capability is not None
-        and maximum_compute < job.minimum_cuda_compute_capability
-    ):
-        reasons.append(
-            "CUDA compute capability requires >= "
-            f"{job.minimum_cuda_compute_capability:g}, maximum is {maximum_compute:g}"
-        )
+
+    compute_values: list[float] = []
+    for gpu in gpus:
+        try:
+            compute_values.append(float(gpu.compute_capability))
+        except ValueError:
+            continue
+    if job.minimum_cuda_compute_capability is not None:
+        if not compute_values:
+            reasons.append("GPU compute capability telemetry is unavailable")
+        elif max(compute_values) < job.minimum_cuda_compute_capability:
+            reasons.append(
+                "CUDA compute capability requires >= "
+                f"{job.minimum_cuda_compute_capability:g}, maximum is {max(compute_values):g}"
+            )
+
+    available_values = [
+        max(0, gpu.memory_total_mb - gpu.memory_used_mb)
+        for gpu in gpus
+        if gpu.memory_used_mb is not None
+    ]
+    if job.minimum_gpu_memory_available_mb > 0:
+        if not available_values:
+            reasons.append("GPU free-memory telemetry is unavailable")
+        elif max(available_values) < job.minimum_gpu_memory_available_mb:
+            reasons.append(
+                "GPU free memory requires >= "
+                f"{job.minimum_gpu_memory_available_mb} MiB, maximum is {max(available_values)} MiB"
+            )
+
+    utilization_values = [
+        gpu.utilization_percent for gpu in gpus if gpu.utilization_percent is not None
+    ]
+    if job.maximum_gpu_utilization_percent is not None:
+        if not utilization_values:
+            reasons.append("GPU utilization telemetry is unavailable")
+        elif min(utilization_values) > job.maximum_gpu_utilization_percent:
+            reasons.append(
+                "GPU utilization requires <= "
+                f"{job.maximum_gpu_utilization_percent:g}%, minimum is {min(utilization_values):g}%"
+            )
     if not reasons:
-        reasons.append("no single GPU satisfies all memory and compute requirements")
+        reasons.append(
+            "no single GPU satisfies all capacity, compute, and load requirements"
+            if load_constrained
+            else "no single GPU satisfies all memory and compute requirements"
+        )
     return reasons
+
+
+def _gpu_matches(job: EvaluationJob, gpu: GpuDevice) -> bool:
+    if gpu.memory_total_mb < job.minimum_gpu_memory_mb:
+        return False
+    if job.minimum_cuda_compute_capability is not None:
+        try:
+            if float(gpu.compute_capability) < job.minimum_cuda_compute_capability:
+                return False
+        except ValueError:
+            return False
+    if job.minimum_gpu_memory_available_mb > 0:
+        if gpu.memory_used_mb is None:
+            return False
+        if max(0, gpu.memory_total_mb - gpu.memory_used_mb) < job.minimum_gpu_memory_available_mb:
+            return False
+    return not (
+        job.maximum_gpu_utilization_percent is not None
+        and (
+            gpu.utilization_percent is None
+            or gpu.utilization_percent > job.maximum_gpu_utilization_percent
+        )
+    )

@@ -276,6 +276,12 @@ def jobs_enqueue(
     minimum_cuda_compute_capability: float | None = typer.Option(
         None, "--minimum-cuda-compute-capability", min=1
     ),
+    minimum_gpu_memory_available_mb: int = typer.Option(
+        0, "--minimum-gpu-memory-available-mb", min=0
+    ),
+    maximum_gpu_utilization_percent: float | None = typer.Option(
+        None, "--maximum-gpu-utilization-percent", min=0, max=100
+    ),
     label: list[str] | None = typer.Option(None, "--label"),
     database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
 ) -> None:
@@ -286,8 +292,10 @@ def jobs_enqueue(
         max_attempts,
         accelerator,
         _parse_labels(label),
-        minimum_gpu_memory_mb,
-        minimum_cuda_compute_capability,
+        minimum_gpu_memory_mb=minimum_gpu_memory_mb,
+        minimum_cuda_compute_capability=minimum_cuda_compute_capability,
+        minimum_gpu_memory_available_mb=minimum_gpu_memory_available_mb,
+        maximum_gpu_utilization_percent=maximum_gpu_utilization_percent,
     )
     console.print(f"queued job {job.job_id} ({job.agent_version})")
 
@@ -303,12 +311,16 @@ def jobs_list(
         console.print(json.dumps([job.model_dump(mode="json") for job in jobs], indent=2))
         return
     for job in jobs:
-        gpu_requirement = ""
-        if job.minimum_gpu_memory_mb or job.minimum_cuda_compute_capability is not None:
-            gpu_requirement = (
-                f" gpu_memory>={job.minimum_gpu_memory_mb}MiB"
-                f" compute_capability>={job.minimum_cuda_compute_capability or 0:g}"
-            )
+        requirements: list[str] = []
+        if job.minimum_gpu_memory_mb:
+            requirements.append(f"gpu_memory>={job.minimum_gpu_memory_mb}MiB")
+        if job.minimum_cuda_compute_capability is not None:
+            requirements.append(f"compute_capability>={job.minimum_cuda_compute_capability:g}")
+        if job.minimum_gpu_memory_available_mb:
+            requirements.append(f"gpu_free>={job.minimum_gpu_memory_available_mb}MiB")
+        if job.maximum_gpu_utilization_percent is not None:
+            requirements.append(f"utilization<={job.maximum_gpu_utilization_percent:g}%")
+        gpu_requirement = f" {' '.join(requirements)}" if requirements else ""
         console.print(
             f"{job.job_id} {job.status} {job.agent_version} "
             f"priority={job.priority} attempts={job.attempts}/{job.max_attempts}{gpu_requirement}"

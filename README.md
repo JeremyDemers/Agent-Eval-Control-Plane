@@ -90,10 +90,12 @@ Workers also refresh NVIDIA GPU telemetry through `nvidia-smi` on lease heartbea
 temperature, and power gauges. Incompatible workers skip jobs without consuming an attempt. See
 [`docs/hardware-scheduling.md`](docs/hardware-scheduling.md) for the normalized capability contract.
 
-CUDA jobs may require minimum framebuffer capacity and compute capability. PostgreSQL admits a lease
-only when one GPU satisfies the complete request, preventing accidental cross-device aggregation.
-Queued jobs expose placement diagnostics that identify stale workers, accelerator and label
-mismatches, and per-device GPU constraints without consuming an execution attempt.
+CUDA jobs may require minimum framebuffer capacity, compute capability, live free memory, and a
+maximum utilization level. PostgreSQL admits a lease only when one GPU satisfies the complete static
+and load-aware request, preventing accidental cross-device aggregation and avoiding already saturated
+devices. Missing load telemetry fails closed. Queued jobs expose placement diagnostics that identify
+stale workers, accelerator and label mismatches, unavailable samples, and per-device GPU constraints
+without consuming an execution attempt.
 
 ```bash
 uv run aecontrol jobs explain JOB_ID
@@ -199,7 +201,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.21.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.22.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -325,8 +327,8 @@ uv run aecontrol store verify
 curl http://127.0.0.1:8000/api/v1/integrity
 ```
 
-Schema v5 adds indexed Guardrails evidence while retaining in-place upgrades and digest backfills for
-older evaluation artifacts. See
+Schema v6 adds load-aware GPU job constraints while retaining indexed Guardrails evidence, in-place
+upgrades, and digest backfills for older evaluation artifacts. See
 [`docs/artifact-integrity.md`](docs/artifact-integrity.md) for the threat model and signature limits.
 
 ## Current Limitations
