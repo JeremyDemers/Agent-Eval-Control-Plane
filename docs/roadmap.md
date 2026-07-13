@@ -18,6 +18,7 @@ Implemented ahead of the original four-day scope:
 - Canonical SHA-256 integrity verification for persisted evaluation evidence
 - Reproducible Python distributions with clean-install CI and release attestations
 - CodeQL, dependency review, and frozen-lock vulnerability auditing
+- W3C trace-context propagation through durable PostgreSQL jobs
 
 Next stages:
 
@@ -25,4 +26,4 @@ Next stages:
 - Kubernetes sharded jobs
 - Hosted provider authentication and endpoint-specific adapters
 - NeMo and LangGraph interoperability packages
-- Multi-tenancy, signed immutable object storage, distributed metrics, and tracing
+- Multi-tenancy, signed immutable object storage, and external trace/metrics backends

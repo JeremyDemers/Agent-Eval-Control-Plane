@@ -56,13 +56,14 @@
 - Reproducible wheel/sdist packaging with clean-install and provenance-attested releases.
 - CodeQL, dependency review, and weekly frozen-lock vulnerability scanning.
 - Public contribution, disclosure, ownership, issue, and pull-request governance.
+- W3C trace-context propagation across HTTP requests, PostgreSQL jobs, and workers.
 
 ## Verification
 
 - `uv sync --extra dev`: passed.
 - `uv run ruff format . && uv run ruff check .`: passed.
 - `uv run mypy`: passed with strict settings.
-- `uv run pytest`: 69 passed, 85.67% total coverage with an enforced 85% floor, including PostgreSQL/API, schema migration, artifact integrity, authentication, GPU telemetry, admission and diagnostics, worker, Ollama, OpenAI-compatible runtime, sandbox, observability, and SDK tests.
+- `uv run pytest`: full suite passes with an enforced 85% coverage floor, including PostgreSQL/API, schema migration, tracing, artifact integrity, authentication, GPU telemetry, admission and diagnostics, worker, Ollama, OpenAI-compatible runtime, sandbox, observability, and SDK tests.
 - `make demo`: passed; regressed candidate produced BLOCK, fixed candidate produced PASS.
 - `make docker-build && make docker-demo`: passed with native Podman.
 - `make package && uvx twine check dist/*`: wheel/sdist build, clean installation, typed API, CLI, and metadata checks passed.

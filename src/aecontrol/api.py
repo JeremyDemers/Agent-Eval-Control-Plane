@@ -40,6 +40,7 @@ from aecontrol.models import (
 )
 from aecontrol.observability import render_prometheus
 from aecontrol.store import ArtifactStore
+from aecontrol.tracing import new_trace, span
 
 DEFAULT_DATABASE_URL = "postgresql://aecontrol@127.0.0.1:55432/aecontrol"
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -111,12 +112,23 @@ def create_app(
             if REQUEST_ID_PATTERN.fullmatch(supplied_request_id)
             else str(uuid4())
         )
+        trace = new_trace(request.headers.get("traceparent"))
+        request.state.request_id = request_id
+        request.state.traceparent = trace.traceparent
         started = time.perf_counter()
         response_status = 500
         try:
-            response = await call_next(request)
+            with span(
+                "http.request",
+                trace.traceparent,
+                method=request.method,
+                path=request.url.path,
+            ) as request_span:
+                request.state.traceparent = request_span.traceparent
+                response = await call_next(request)
             response_status = response.status_code
             response.headers["X-Request-ID"] = request_id
+            response.headers["traceparent"] = request.state.traceparent
             duration_ms = (time.perf_counter() - started) * 1000
             response.headers["Server-Timing"] = f"app;dur={duration_ms:.2f}"
             return response
@@ -126,6 +138,7 @@ def create_app(
                     {
                         "event": "http_request",
                         "request_id": request_id,
+                        "trace_id": request.state.traceparent.split("-")[1],
                         "method": request.method,
                         "path": request.url.path,
                         "status": response_status,
@@ -199,7 +212,9 @@ def create_app(
         tags=["jobs"],
     )
     def enqueue_job(
-        request: EvaluationJobRequest, _principal: Principal = Depends(require_write)
+        request: EvaluationJobRequest,
+        http_request: Request,
+        _principal: Principal = Depends(require_write),
     ) -> EvaluationJob:
         suite_path = _existing_file(request.suite_path, "suite", allowed_input_files)
         try:
@@ -212,6 +227,8 @@ def create_app(
                 request.required_labels,
                 request.minimum_gpu_memory_mb,
                 request.minimum_cuda_compute_capability,
+                http_request.state.traceparent,
+                http_request.state.request_id,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error

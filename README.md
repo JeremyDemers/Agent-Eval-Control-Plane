@@ -107,7 +107,8 @@ Set `DATABASE_URL` to use an existing PostgreSQL deployment. The default is show
 API suite and policy files are restricted to `AECONTROL_INPUT_ROOT`, which defaults to `examples/`.
 
 Operational endpoints provide database health, queue-aware readiness, Prometheus-compatible metrics,
-and correlated request timing:
+correlated request timing, and W3C Trace Context propagation. Queued jobs persist their originating
+`traceparent` and request ID; workers continue the same trace after the PostgreSQL handoff.
 
 ```bash
 curl http://127.0.0.1:8000/healthz
@@ -116,6 +117,8 @@ curl http://127.0.0.1:8000/metrics
 ```
 
 See [`docs/operations.md`](docs/operations.md) for metric semantics and request-ID behavior.
+See [`docs/distributed-tracing.md`](docs/distributed-tracing.md) for durable trace propagation and
+collector boundaries.
 
 ## Python SDK
 
@@ -178,7 +181,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.15.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.16.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 

@@ -48,7 +48,7 @@ def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 3
+        assert store.health()["schema_version"] == 4
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -116,8 +116,9 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 3
+    assert health.json()["schema_version"] == 4
     assert health.headers["x-request-id"] == "integration-request"
+    assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")
 
     readiness = api_client.get("/readyz")
@@ -243,8 +244,10 @@ def test_api_returns_actionable_not_found_responses(api_client: TestClient) -> N
 
 
 def test_durable_job_runs_to_completion(api_client: TestClient) -> None:
+    parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     queued = api_client.post(
         "/api/v1/jobs",
+        headers={"traceparent": parent, "X-Request-ID": "queue-request"},
         json={
             "suite_path": "examples/suites/coding_repair.yaml",
             "agent_version": "candidate_fixed",
@@ -254,6 +257,9 @@ def test_durable_job_runs_to_completion(api_client: TestClient) -> None:
     )
     assert queued.status_code == 202
     assert queued.json()["status"] == "queued"
+    assert queued.json()["traceparent"].split("-")[1] == parent.split("-")[1]
+    assert queued.json()["request_id"] == "queue-request"
+    assert queued.headers["traceparent"] == queued.json()["traceparent"]
 
     store: ArtifactStore = api_client.app.state.store
     completed = asyncio.run(EvaluationWorker(store, "test-worker").run_once())

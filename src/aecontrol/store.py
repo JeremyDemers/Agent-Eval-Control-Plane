@@ -30,7 +30,7 @@ from aecontrol.models import (
 )
 from aecontrol.placement import diagnose_placement
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class ArtifactStore:
@@ -151,6 +151,12 @@ class ArtifactStore:
                    minimum_cuda_compute_capability DOUBLE PRECISION"""
             )
             connection.execute(
+                "ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS traceparent TEXT"
+            )
+            connection.execute(
+                "ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS request_id TEXT"
+            )
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS workers (
                     worker_id TEXT PRIMARY KEY,
@@ -170,7 +176,7 @@ class ArtifactStore:
                 connection.execute(
                     "INSERT INTO schema_metadata(version) VALUES (%s)", (SCHEMA_VERSION,)
                 )
-            elif int(row["version"]) in {1, 2}:
+            elif int(row["version"]) in {1, 2, 3}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif int(row["version"]) != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {row['version']}"
@@ -408,6 +414,8 @@ class ArtifactStore:
         required_labels: dict[str, str] | None = None,
         minimum_gpu_memory_mb: int = 0,
         minimum_cuda_compute_capability: float | None = None,
+        traceparent: str | None = None,
+        request_id: str | None = None,
     ) -> EvaluationJob:
         effective_labels = dict(required_labels or {})
         if agent_version.startswith("ollama/"):
@@ -429,6 +437,8 @@ class ArtifactStore:
             required_labels=effective_labels,
             minimum_gpu_memory_mb=minimum_gpu_memory_mb,
             minimum_cuda_compute_capability=minimum_cuda_compute_capability,
+            traceparent=traceparent,
+            request_id=request_id,
         )
         self.initialize()
         with self._connect() as connection:
@@ -437,8 +447,8 @@ class ArtifactStore:
                 INSERT INTO evaluation_jobs (
                     job_id, suite_path, agent_version, status, priority, attempts,
                     max_attempts, created_at, updated_at, required_accelerator, required_labels,
-                    minimum_gpu_memory_mb, minimum_cuda_compute_capability
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    minimum_gpu_memory_mb, minimum_cuda_compute_capability, traceparent, request_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -455,6 +465,8 @@ class ArtifactStore:
                     Jsonb(job.required_labels),
                     job.minimum_gpu_memory_mb,
                     job.minimum_cuda_compute_capability,
+                    job.traceparent,
+                    job.request_id,
                 ),
             ).fetchone()
         if row is None:
