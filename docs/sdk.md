@@ -4,7 +4,7 @@
 engine, database, and API.
 
 ```python
-from aecontrol import AgentEvalClient
+from aecontrol import AgentEvalClient, ExpectedGuardrailAction
 from aecontrol.models import Accelerator
 
 client = AgentEvalClient("http://127.0.0.1:8000", api_key="your-high-entropy-key")
@@ -27,7 +27,9 @@ guardrail = client.check_guardrails(
     "content_safety",
     "User request",
     "Candidate agent response",
+    expected_action=ExpectedGuardrailAction.INTERVENTION,
 )
+efficacy = client.guardrail_efficacy(config_id="content_safety")
 ```
 
 `AsyncAgentEvalClient` provides matching coroutine methods and uses non-blocking polling for terminal
@@ -40,6 +42,9 @@ Guardrails lifecycle methods include `guardrail_config_versions`,
 `register_guardrail_config_version`, `guardrail_config_activations`, and
 `activate_guardrail_config`. `check_guardrails(..., config_version="2026.07.1")` fails with a conflict
 if that version is no longer active, allowing deployment automation to detect policy drift.
+`check_guardrails(..., expected_action=ExpectedGuardrailAction.INTERVENTION)` stores a supervised
+label in signed evidence. `guardrail_efficacy` then returns typed, per-version confusion matrices and
+derived metrics; the asynchronous client exposes the same method.
 
 The default HTTP transport accepts only absolute HTTP(S) URLs, supports caller-generated request IDs,
 normalizes structured API and connection failures into `AgentEvalAPIError`, and rejects malformed JSON

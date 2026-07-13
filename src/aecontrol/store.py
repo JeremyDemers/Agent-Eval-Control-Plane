@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import re
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Literal, cast
 from uuid import UUID
@@ -16,9 +17,11 @@ from aecontrol.capacity import forecast_gpu_capacity
 from aecontrol.guardrails import (
     GuardrailConfigActivation,
     GuardrailConfigVersion,
+    GuardrailEfficacyReport,
     GuardrailEvidence,
     StoredGuardrailEvidence,
     StoredGuardrailEvidenceSummary,
+    build_guardrail_efficacy_report,
 )
 from aecontrol.integrity import (
     ArtifactAuthenticityError,
@@ -47,7 +50,7 @@ from aecontrol.models import (
 )
 from aecontrol.placement import diagnose_placement
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class ArtifactStore:
@@ -173,6 +176,28 @@ class ArtifactStore:
             )
             connection.execute(
                 "ALTER TABLE guardrail_evidence ADD COLUMN IF NOT EXISTS config_version TEXT"
+            )
+            connection.execute(
+                "ALTER TABLE guardrail_evidence ADD COLUMN IF NOT EXISTS expected_action TEXT"
+            )
+            connection.execute(
+                """
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'guardrail_evidence_expected_action_check'
+                          AND conrelid = 'guardrail_evidence'::regclass
+                    ) THEN
+                        ALTER TABLE guardrail_evidence
+                        ADD CONSTRAINT guardrail_evidence_expected_action_check
+                        CHECK (expected_action IN ('pass_through', 'intervention'));
+                    END IF;
+                END $$
+                """
+            )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_guardrail_evidence_efficacy
+                   ON guardrail_evidence(config_id, config_version, created_at DESC)"""
             )
             connection.execute(
                 """
@@ -603,8 +628,9 @@ class ArtifactStore:
                 """
                 INSERT INTO guardrail_evidence (
                     evidence_id, created_at, config_id, config_version, model, passed_through,
-                    payload, payload_sha256, signature_key_id, signature_hmac_sha256
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    expected_action, payload, payload_sha256, signature_key_id,
+                    signature_hmac_sha256
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     artifact.evidence_id,
@@ -613,6 +639,7 @@ class ArtifactStore:
                     evidence.config_version,
                     evidence.model,
                     evidence.passed_through,
+                    evidence.expected_action,
                     Jsonb(payload),
                     digest,
                     signature_key_id,
@@ -646,12 +673,66 @@ class ArtifactStore:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT evidence_id, created_at, config_id, config_version, model, passed_through
+                SELECT evidence_id, created_at, config_id, config_version, model, passed_through,
+                       expected_action
                 FROM guardrail_evidence ORDER BY created_at DESC LIMIT %s
                 """,
                 (limit,),
             ).fetchall()
         return [StoredGuardrailEvidenceSummary.model_validate(row) for row in rows]
+
+    def guardrail_efficacy_report(
+        self,
+        *,
+        config_id: str | None = None,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
+    ) -> GuardrailEfficacyReport:
+        self.initialize()
+        resolved_end = window_end or datetime.now(UTC)
+        resolved_start = window_start or resolved_end - timedelta(days=30)
+        if resolved_start.tzinfo is None or resolved_end.tzinfo is None:
+            raise ValueError("efficacy timestamps must include a timezone")
+        if resolved_start >= resolved_end:
+            raise ValueError("efficacy window start must be before window end")
+        if resolved_end - resolved_start > timedelta(days=366):
+            raise ValueError("efficacy windows cannot exceed 366 days")
+        where: sql.Composable = sql.SQL("created_at >= %s AND created_at < %s")
+        parameters: tuple[object, ...] = (resolved_start, resolved_end)
+        if config_id is not None:
+            where += sql.SQL(" AND config_id = %s")
+            parameters += (config_id,)
+        with self._connect() as connection:
+            rows = connection.execute(
+                sql.SQL(
+                    """
+                    SELECT evidence_id, payload, payload_sha256, signature_key_id,
+                           signature_hmac_sha256
+                    FROM guardrail_evidence
+                    WHERE {}
+                    ORDER BY created_at
+                    """
+                ).format(where),
+                parameters,
+            ).fetchall()
+        artifacts: list[StoredGuardrailEvidence] = []
+        for row in rows:
+            evidence_id = cast(UUID, row["evidence_id"])
+            self._verify_artifact(
+                "guardrail_evidence",
+                evidence_id,
+                row["payload_sha256"],
+                row["payload"],
+                row["signature_key_id"],
+                row["signature_hmac_sha256"],
+            )
+            artifacts.append(StoredGuardrailEvidence.model_validate(row["payload"]))
+        return build_guardrail_efficacy_report(
+            artifacts,
+            window_start=resolved_start,
+            window_end=resolved_end,
+            config_id=config_id,
+        )
 
     def verify_artifacts(self) -> ArtifactIntegrityReport:
         self.initialize()

@@ -26,7 +26,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/guardrails/check \
     "model": "meta/llama-3.1-8b-instruct",
     "config_id": "content_safety",
     "input_text": "User request",
-    "output_text": "Candidate agent response"
+    "output_text": "Candidate agent response",
+    "expected_action": "intervention"
   }'
 curl http://127.0.0.1:8000/api/v1/guardrails/evidence
 curl http://127.0.0.1:8000/api/v1/guardrails/evidence/EVIDENCE_ID
@@ -81,6 +82,31 @@ evidence envelope. Callers may also send `config_version`; a mismatch with the a
 HTTP 409 before inference. When no local version is active, the check remains backward compatible but
 is explicitly marked unmanaged in typed evidence and browser views.
 
+## Policy Efficacy
+
+Schema v11 lets evaluation datasets attach an optional expected action to each check:
+`pass_through` or `intervention`. The label is stored inside the canonical signed evidence envelope,
+so an efficacy report fails closed if any contributing payload fails digest or signature verification.
+Historical and production checks without labels remain valid but count only toward sample size,
+intervention rate, and label coverage.
+
+```bash
+uv run aecontrol guardrails efficacy --config content_safety --days 30
+curl 'http://127.0.0.1:8000/api/v1/guardrails/efficacy?config_id=content_safety'
+```
+
+Reports group evidence by configuration ID and immutable version. For labeled checks, an expected
+intervention that intervenes is a true positive; an expected pass-through that intervenes is a false
+positive. The report exposes the full confusion matrix plus accuracy, precision, recall, and
+false-positive rate. A metric is `null` when its denominator is zero rather than presenting an
+unsupported zero. API windows default to 30 days, require timezone-aware timestamps, and are capped
+at 366 days.
+
+Expected actions are evaluation labels supplied by the caller, not judgments produced by NeMo
+Guardrails. Their quality and dataset representativeness remain operator responsibilities. These
+metrics measure agreement with labeled policy expectations; they do not prove that a policy is safe,
+unbiased, or appropriate for every deployment.
+
 The trust boundary is precise: upstream discovery proves only that the server exposes the registered
 configuration ID. NeMo's list API does not return bundle content or a digest, so the deployment
 pipeline must independently ensure the running folder matches the registered SHA-256. The activation
@@ -88,7 +114,7 @@ record is an operator assertion tied to that verification, not remote attestatio
 See NVIDIA's [configuration structure](https://docs.nvidia.com/nemo/guardrails/configure-guardrails/overview)
 and [configuration discovery API](https://docs.nvidia.com/nemo/guardrails/latest/run-rails/using-fastapi-server/list-guardrail-configs.html).
 
-The browser dashboard includes total checks, intervention rate, and the ten most recent evidence
+The browser dashboard includes total checks, intervention rate, 30-day version efficacy, and the ten most recent evidence
 records. `/guardrails/evidence/EVIDENCE_ID` renders the submitted text, guardrailed response,
 activated rails, and server statistics. Dynamic values are HTML-escaped, and the detail route uses the
 same digest verification as the REST API before returning content.
@@ -97,7 +123,8 @@ When API authentication is enabled, configuration discovery and evidence retriev
 executing and storing a check requires `write`, while registration and activation require `admin`.
 The synchronous and asynchronous Python SDKs expose
 `guardrail_configs`, `check_guardrails`, `list_guardrail_evidence`, and
-`get_guardrail_evidence` with the same typed contracts.
+`get_guardrail_evidence` with the same typed contracts. `guardrail_efficacy` supports the same
+configuration and date-window filters as REST.
 
 The typed evidence contains the configuration and model, submitted and returned text, activated rails,
 server statistics, and `passed_through`. Pass-through means the checked text was returned exactly; an
@@ -105,14 +132,16 @@ altered or refused response is an intervention. AgentEval does not infer safety 
 refusal phrase or from a rail name.
 
 Schema v5 introduced the complete typed envelope as JSONB alongside queryable configuration, model,
-pass-through, and timestamp columns. Schema v10 adds the optional active version reference. The
+pass-through, and timestamp columns. Schema v10 adds the optional active version reference; schema
+v11 adds the expected-action projection used for efficacy analysis. The
 canonical payload digest is included in the full
 `/api/v1/integrity` audit. Detail reads return HTTP 409 without returning the untrusted payload when
 the digest does not match.
 
 `/metrics` exports `aecontrol_guardrail_evidence_total` and
-`aecontrol_guardrail_interventions_total`. These gauges deliberately omit configuration, model,
-prompt, and evidence labels to avoid sensitive or high-cardinality telemetry.
+`aecontrol_guardrail_interventions_total`, label coverage, labeled-check count, policy accuracy, and
+false-positive rate for the default 30-day window. These gauges deliberately omit configuration,
+version, model, prompt, and evidence labels to avoid sensitive or high-cardinality telemetry.
 
 `NEMO_GUARDRAILS_API_KEY` adds an optional bearer credential. The key is transport-only and does not
 appear in evidence. Protocol tests use an in-process server double, keeping CI deterministic and free

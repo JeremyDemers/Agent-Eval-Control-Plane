@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from collections import defaultdict
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import Mock
 from urllib.error import HTTPError, URLError
@@ -11,8 +12,10 @@ from uuid import uuid4
 import pytest
 
 from aecontrol.guardrails import (
+    ExpectedGuardrailAction,
     GuardrailConfigActivation,
     GuardrailConfigVersion,
+    GuardrailEfficacyReport,
     GuardrailEvidence,
     StoredGuardrailEvidence,
 )
@@ -232,7 +235,34 @@ def test_client_guardrail_evidence_workflow() -> None:
         "input_text": "request",
         "output_text": "candidate",
         "config_version": None,
+        "expected_action": None,
     }
+
+
+def test_client_reads_filtered_guardrail_efficacy() -> None:
+    transport = FakeTransport()
+    start = datetime(2026, 7, 1, tzinfo=UTC)
+    end = datetime(2026, 7, 31, tzinfo=UTC)
+    report = GuardrailEfficacyReport(
+        window_start=start,
+        window_end=end,
+        config_id="content_safety",
+        total_checks=0,
+        labeled_checks=0,
+        versions=[],
+    )
+    path = (
+        "/api/v1/guardrails/efficacy?config_id=content_safety&"
+        "since=2026-07-01T00%3A00%3A00%2B00%3A00&until=2026-07-31T00%3A00%3A00%2B00%3A00"
+    )
+    transport.add("GET", path, report.model_dump(mode="json"))
+
+    loaded = AgentEvalClient(transport=transport).guardrail_efficacy(
+        config_id="content_safety", since=start, until=end
+    )
+
+    assert loaded == report
+    assert transport.requests[0][1] == path
 
 
 def test_client_manages_guardrail_configuration_lifecycle() -> None:
@@ -343,9 +373,16 @@ async def test_async_client_guardrail_evidence_workflow() -> None:
     transport.add("GET", f"/api/v1/guardrails/evidence/{artifact.evidence_id}", payload)
     client = AsyncAgentEvalClient(transport=transport)
 
-    created = await client.check_guardrails("nim/model", "safety", "request", "candidate")
+    created = await client.check_guardrails(
+        "nim/model",
+        "safety",
+        "request",
+        "candidate",
+        expected_action=ExpectedGuardrailAction.PASS_THROUGH,
+    )
     assert created.evidence.passed_through is True
     assert await client.get_guardrail_evidence(artifact.evidence_id) == artifact
+    assert transport.requests[0][2]["expected_action"] == "pass_through"
 
 
 def test_http_transport_validates_url_and_decodes_response(monkeypatch: pytest.MonkeyPatch) -> None:

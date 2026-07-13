@@ -4,8 +4,11 @@ from aecontrol.compare import compare_runs
 from aecontrol.engine import EvaluationEngine
 from aecontrol.gate import evaluate_gate
 from aecontrol.guardrails import (
+    ExpectedGuardrailAction,
     GuardrailConfigActivation,
     GuardrailConfigVersion,
+    GuardrailEfficacyMetrics,
+    GuardrailEfficacyReport,
     GuardrailEvidence,
     GuardrailsClient,
     StoredGuardrailEvidence,
@@ -18,8 +21,11 @@ __all__ = [
     "AgentEvalClient",
     "AsyncAgentEvalClient",
     "EvaluationEngine",
+    "ExpectedGuardrailAction",
     "GuardrailConfigActivation",
     "GuardrailConfigVersion",
+    "GuardrailEfficacyMetrics",
+    "GuardrailEfficacyReport",
     "GuardrailEvidence",
     "GuardrailsClient",
     "NIMClient",

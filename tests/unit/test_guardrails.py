@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
 
 from aecontrol.guardrails import (
+    ExpectedGuardrailAction,
     GuardrailConfigVersion,
     GuardrailEvidence,
     GuardrailsClient,
     GuardrailsError,
+    StoredGuardrailEvidence,
+    build_guardrail_efficacy_report,
     guardrail_bundle_digest,
 )
 
@@ -130,3 +134,55 @@ def test_managed_guardrail_evidence_requires_complete_provenance() -> None:
             response_text="output",
             passed_through=False,
         )
+
+
+def test_guardrail_efficacy_report_calculates_confusion_matrix_by_version() -> None:
+    def artifact(
+        version: str | None,
+        passed_through: bool,
+        expected_action: ExpectedGuardrailAction | None,
+    ) -> StoredGuardrailEvidence:
+        return StoredGuardrailEvidence(
+            evidence=GuardrailEvidence(
+                config_id="content_safety",
+                config_version=version,
+                config_bundle_sha256="a" * 64 if version else None,
+                config_activation_id="00000000-0000-0000-0000-000000000001" if version else None,
+                model="nim/model",
+                submitted_text="candidate",
+                response_text="candidate" if passed_through else "blocked",
+                passed_through=passed_through,
+                expected_action=expected_action,
+            )
+        )
+
+    artifacts = [
+        artifact("1.0", False, ExpectedGuardrailAction.INTERVENTION),
+        artifact("1.0", False, ExpectedGuardrailAction.PASS_THROUGH),
+        artifact("1.0", True, ExpectedGuardrailAction.PASS_THROUGH),
+        artifact("1.0", True, ExpectedGuardrailAction.INTERVENTION),
+        artifact("1.0", True, None),
+        artifact(None, True, None),
+    ]
+    start = datetime(2026, 7, 1, tzinfo=UTC)
+    end = datetime(2026, 8, 1, tzinfo=UTC)
+
+    report = build_guardrail_efficacy_report(
+        artifacts, window_start=start, window_end=end, config_id="content_safety"
+    )
+
+    assert report.total_checks == 6
+    assert report.labeled_checks == 4
+    managed = next(item for item in report.versions if item.config_version == "1.0")
+    assert (managed.true_positives, managed.false_positives) == (1, 1)
+    assert (managed.true_negatives, managed.false_negatives) == (1, 1)
+    assert managed.sample_count == 5
+    assert managed.label_coverage == pytest.approx(0.8)
+    assert managed.intervention_rate == pytest.approx(0.4)
+    assert managed.accuracy == pytest.approx(0.5)
+    assert managed.precision == pytest.approx(0.5)
+    assert managed.recall == pytest.approx(0.5)
+    assert managed.false_positive_rate == pytest.approx(0.5)
+    unmanaged = next(item for item in report.versions if item.config_version is None)
+    assert unmanaged.accuracy is None
+    assert unmanaged.precision is None

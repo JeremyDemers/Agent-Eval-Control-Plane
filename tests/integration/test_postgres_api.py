@@ -50,7 +50,7 @@ def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 10
+        assert store.health()["schema_version"] == 11
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -144,7 +144,7 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 10
+    assert health.json()["schema_version"] == 11
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")
@@ -522,10 +522,96 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
     blocked = api_client.get(f"/api/v1/guardrails/evidence/{evidence_id}")
     assert blocked.status_code == 409
     assert "failed SHA-256 integrity verification" in blocked.json()["detail"]
+    assert api_client.get("/api/v1/guardrails/efficacy").status_code == 409
     browser_blocked = api_client.get(f"/guardrails/evidence/{evidence_id}")
     assert browser_blocked.status_code == 409
     assert api_client.get(f"/api/v1/guardrails/evidence/{uuid4()}").status_code == 404
     assert api_client.get(f"/guardrails/evidence/{uuid4()}").status_code == 404
+
+
+def test_guardrail_efficacy_compares_labeled_policy_versions(
+    api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def configs(_client) -> list[GuardrailsConfig]:  # type: ignore[no-untyped-def]
+        return [GuardrailsConfig(id="content_safety")]
+
+    async def check(_client, **kwargs) -> GuardrailEvidence:  # type: ignore[no-untyped-def]
+        submitted = kwargs["output_text"] or kwargs["input_text"]
+        passed_through = submitted.startswith("safe")
+        return GuardrailEvidence(
+            config_id="content_safety",
+            model="nim/model",
+            submitted_text=submitted,
+            response_text=submitted if passed_through else "blocked",
+            passed_through=passed_through,
+        )
+
+    client_type = type(api_client.app.state.guardrails_client)
+    monkeypatch.setattr(client_type, "configs", configs)
+    monkeypatch.setattr(client_type, "check", check)
+    registered = api_client.post(
+        "/api/v1/guardrails/config-versions",
+        json={
+            "config_id": "content_safety",
+            "version": "1.0",
+            "bundle_sha256": "a" * 64,
+        },
+    )
+    assert registered.status_code == 201
+    assert (
+        api_client.post(
+            "/api/v1/guardrails/config-activations",
+            json={"config_id": "content_safety", "version": "1.0"},
+        ).status_code
+        == 201
+    )
+
+    cases = [
+        ("unsafe-tp", "intervention"),
+        ("unsafe-fp", "pass_through"),
+        ("safe-tn", "pass_through"),
+        ("safe-fn", "intervention"),
+        ("safe-unlabeled", None),
+    ]
+    for output_text, expected_action in cases:
+        created = api_client.post(
+            "/api/v1/guardrails/check",
+            json={
+                "model": "nim/model",
+                "config_id": "content_safety",
+                "input_text": "request",
+                "output_text": output_text,
+                "expected_action": expected_action,
+            },
+        )
+        assert created.status_code == 201
+
+    response = api_client.get("/api/v1/guardrails/efficacy?config_id=content_safety")
+    assert response.status_code == 200
+    report = response.json()
+    assert report["total_checks"] == 5
+    assert report["labeled_checks"] == 4
+    metrics = report["versions"][0]
+    assert metrics["config_version"] == "1.0"
+    assert metrics["label_coverage"] == pytest.approx(0.8)
+    assert metrics["intervention_rate"] == pytest.approx(0.4)
+    assert metrics["accuracy"] == pytest.approx(0.5)
+    assert metrics["precision"] == pytest.approx(0.5)
+    assert metrics["recall"] == pytest.approx(0.5)
+    assert metrics["false_positive_rate"] == pytest.approx(0.5)
+
+    metrics_payload = api_client.get("/metrics").text
+    assert "aecontrol_guardrail_policy_accuracy 0.500000" in metrics_payload
+    dashboard = api_client.get("/").text
+    assert "Policy Efficacy (30 days)" in dashboard
+    assert "content_safety@1.0" in dashboard
+    assert "4 (80.0%)" in dashboard
+    assert "Policy accuracy<b>50.0%" in dashboard
+
+    invalid_window = api_client.get(
+        "/api/v1/guardrails/efficacy?since=2026-08-01T00:00:00Z&until=2026-07-01T00:00:00Z"
+    )
+    assert invalid_window.status_code == 422
 
 
 def test_guardrail_upstream_errors_are_actionable(

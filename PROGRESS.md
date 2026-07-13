@@ -72,6 +72,8 @@
 - Historical CUDA/MIG duration aggregation with p90 queue clearance ETA and sample-based confidence.
 - Immutable NeMo Guardrails bundle registry, upstream-verified activation, auditable rollback, and
   version-bound signed evidence.
+- Supervised NeMo Guardrails policy efficacy by immutable version with confusion matrices, label
+  coverage, bounded reporting windows, dashboard comparisons, SDK, CLI, and Prometheus metrics.
 
 ## Verification
 
@@ -95,4 +97,4 @@
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
 - Kubernetes database/operator integration, hardened worker isolation, additional hosted providers,
-  multi-tenancy, LangGraph, and NeMo policy efficacy analysis remain on the roadmap.
+  multi-tenancy and LangGraph remain on the roadmap.

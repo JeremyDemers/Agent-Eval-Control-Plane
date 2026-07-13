@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from aecontrol.guardrails import GuardrailEfficacyReport
 from aecontrol.models import (
     GateOutcome,
     GpuCapacityForecast,
@@ -15,6 +16,7 @@ def render_prometheus(
     snapshot: OperationalSnapshot,
     workers: Iterable[WorkerRecord] = (),
     gpu_capacity: GpuCapacityForecast | None = None,
+    guardrail_efficacy: GuardrailEfficacyReport | None = None,
 ) -> str:
     lines = [
         "# HELP aecontrol_runs_total Persisted evaluation runs.",
@@ -36,6 +38,41 @@ def render_prometheus(
         f'aecontrol_jobs{{status="{status.value}"}} {snapshot.job_counts.get(status.value, 0)}'
         for status in JobStatus
     )
+    if guardrail_efficacy is not None:
+        correct = sum(
+            item.true_positives + item.true_negatives for item in guardrail_efficacy.versions
+        )
+        false_positives = sum(item.false_positives for item in guardrail_efficacy.versions)
+        true_negatives = sum(item.true_negatives for item in guardrail_efficacy.versions)
+        lines.extend(
+            [
+                "# HELP aecontrol_guardrail_labeled_checks Guardrails checks carrying expected-action labels in the reporting window.",
+                "# TYPE aecontrol_guardrail_labeled_checks gauge",
+                f"aecontrol_guardrail_labeled_checks {guardrail_efficacy.labeled_checks}",
+                "# HELP aecontrol_guardrail_label_coverage Ratio of checks carrying expected-action labels in the reporting window.",
+                "# TYPE aecontrol_guardrail_label_coverage gauge",
+                "aecontrol_guardrail_label_coverage "
+                f"{_ratio(guardrail_efficacy.labeled_checks, guardrail_efficacy.total_checks):.6f}",
+            ]
+        )
+        if guardrail_efficacy.labeled_checks:
+            lines.extend(
+                [
+                    "# HELP aecontrol_guardrail_policy_accuracy Correct expected-action decisions among labeled checks.",
+                    "# TYPE aecontrol_guardrail_policy_accuracy gauge",
+                    "aecontrol_guardrail_policy_accuracy "
+                    f"{_ratio(correct, guardrail_efficacy.labeled_checks):.6f}",
+                ]
+            )
+        if false_positives + true_negatives:
+            lines.extend(
+                [
+                    "# HELP aecontrol_guardrail_false_positive_rate Unexpected interventions among expected pass-through checks.",
+                    "# TYPE aecontrol_guardrail_false_positive_rate gauge",
+                    "aecontrol_guardrail_false_positive_rate "
+                    f"{_ratio(false_positives, false_positives + true_negatives):.6f}",
+                ]
+            )
     if gpu_capacity is not None:
         lines.extend(
             [
@@ -165,3 +202,7 @@ def render_prometheus(
 
 def _escape_label(value: str) -> str:
     return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
+def _ratio(numerator: int, denominator: int) -> float:
+    return numerator / denominator if denominator else 0.0

@@ -231,7 +231,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.28.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.29.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -327,7 +327,7 @@ uv run aecontrol guardrails check --model meta/llama-3.1-8b-instruct \
 
 curl -X POST http://127.0.0.1:8000/api/v1/guardrails/check \
   -H 'Content-Type: application/json' \
-  -d '{"model":"meta/llama-3.1-8b-instruct","config_id":"content_safety","input_text":"request","output_text":"agent response"}'
+  -d '{"model":"meta/llama-3.1-8b-instruct","config_id":"content_safety","input_text":"request","output_text":"agent response","expected_action":"intervention"}'
 ```
 
 The browser explorer summarizes safety-check volume and intervention rate, links recent evidence to
@@ -345,7 +345,14 @@ uv run aecontrol guardrails register --config content_safety \
   --version 2026.07.1 --bundle-sha256 "$BUNDLE_SHA"
 uv run aecontrol guardrails activate --config content_safety --version 2026.07.1
 uv run aecontrol guardrails activations --config content_safety
+uv run aecontrol guardrails efficacy --config content_safety --days 30
 ```
+
+Schema v11 adds optional expected-action labels to signed evidence and compares policy versions with
+label coverage, intervention rate, confusion matrices, accuracy, precision, recall, and false-positive
+rate. `GET /api/v1/guardrails/efficacy` supports configuration and timezone-aware date-window filters;
+the dashboard presents a 30-day version comparison without treating unlabeled historical checks as
+correct outcomes.
 
 ![NeMo Guardrails intervention evidence with activated rails and server statistics](docs/assets/guardrail-evidence.png)
 
@@ -388,7 +395,7 @@ model limits.
 The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
 hardened isolation for untrusted code. The project consumes but does not install or reconfigure NVIDIA
 GPU Operator; production MIG telemetry should be collected with DCGM. Managed database integration,
-additional hosted providers, object storage, NeMo policy efficacy analysis, LangGraph adapters, and
+additional hosted providers, object storage, LangGraph adapters, and
 multi-tenancy remain in `docs/roadmap.md`.
 
 ## Project Governance

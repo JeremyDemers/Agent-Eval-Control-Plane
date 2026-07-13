@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import UTC, datetime
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -9,6 +10,8 @@ from aecontrol.cli import _parse_labels, app
 from aecontrol.guardrails import (
     GuardrailConfigActivation,
     GuardrailConfigVersion,
+    GuardrailEfficacyMetrics,
+    GuardrailEfficacyReport,
     GuardrailEvidence,
     GuardrailsConfig,
 )
@@ -253,6 +256,32 @@ def test_guardrails_cli_manages_version_activation_and_history(monkeypatch) -> N
         bundle_sha256=version.bundle_sha256,
         activated_by="local-trust",
     )
+    efficacy = GuardrailEfficacyReport(
+        window_start=datetime(2026, 7, 1, tzinfo=UTC),
+        window_end=datetime(2026, 7, 31, tzinfo=UTC),
+        total_checks=5,
+        labeled_checks=4,
+        versions=[
+            GuardrailEfficacyMetrics(
+                config_id="content_safety",
+                config_version="2026.07.1",
+                sample_count=5,
+                labeled_count=4,
+                pass_through_count=3,
+                intervention_count=2,
+                true_positives=1,
+                false_positives=1,
+                true_negatives=2,
+                false_negatives=0,
+                label_coverage=0.8,
+                intervention_rate=0.4,
+                accuracy=0.75,
+                precision=0.5,
+                recall=1,
+                false_positive_rate=1 / 3,
+            )
+        ],
+    )
 
     class Store:
         def __init__(self, _database_url: str) -> None:
@@ -269,6 +298,9 @@ def test_guardrails_cli_manages_version_activation_and_history(monkeypatch) -> N
 
         def list_guardrail_config_activations(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
             return [activation]
+
+        def guardrail_efficacy_report(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return efficacy
 
     async def configs(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         return [GuardrailsConfig(id="content_safety")]
@@ -303,6 +335,9 @@ def test_guardrails_cli_manages_version_activation_and_history(monkeypatch) -> N
         ],
     )
     history = runner.invoke(app, ["guardrails", "activations", "--config", "content_safety"])
+    measured = runner.invoke(
+        app, ["guardrails", "efficacy", "--config", "content_safety", "--days", "30"]
+    )
 
     assert listed.exit_code == 0
     assert "content_safety@2026.07.1 active" in listed.output
@@ -312,6 +347,10 @@ def test_guardrails_cli_manages_version_activation_and_history(monkeypatch) -> N
     assert "activated content_safety@2026.07.1" in activated.output
     assert history.exit_code == 0
     assert "by=local-trust" in history.output
+    assert measured.exit_code == 0
+    assert "checks=5 labeled=4 window=30d" in measured.output
+    assert "accuracy=75.0%" in measured.output
+    assert "false-positive-rate=33.3%" in measured.output
 
 
 def test_guardrails_cli_digests_configuration_bundle(tmp_path: Path) -> None:
