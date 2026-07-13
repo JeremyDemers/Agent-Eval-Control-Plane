@@ -14,6 +14,11 @@ verify canonical payload digests before rendering evidence.
 Runtime adapters and evaluators use typed protocols so future integrations can be added without
 rewriting the core engine.
 
+`EvaluationEngine` accepts an injected runtime protocol. The optional LangGraph adapter consumes
+compiled graph v2 streams, records bounded node/subgraph activity, and maps final root state into the
+same `AgentOutput` contract as built-in runtimes. LangGraph remains an optional dependency, and graph
+construction stays in trusted application code rather than accepting arbitrary imports over HTTP.
+
 The coding-repair demo models each agent version as a strategy class. The runtime resolves
 `baseline`, `candidate_regressed`, or `candidate_fixed`, then executes the same dataset and evaluator
 suite for each version. This keeps agent behavior separate from comparison and quality-gate logic.

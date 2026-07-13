@@ -116,7 +116,15 @@ class ToolResult(BaseModel):
 
 class TrajectoryStep(BaseModel):
     step_id: UUID = Field(default_factory=uuid4)
-    kind: Literal["message", "tool_call", "tool_result", "error", "final"]
+    kind: Literal[
+        "message",
+        "tool_call",
+        "tool_result",
+        "graph_node",
+        "graph_event",
+        "error",
+        "final",
+    ]
     timestamp: datetime = Field(default_factory=utc_now)
     data: dict[str, JsonValue]
 

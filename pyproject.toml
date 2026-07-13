@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aecontrol"
-version = "0.29.0"
+version = "0.30.0"
 description = "AgentEval Control Plane: deterministic agent evaluation and release gates."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -31,15 +31,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+langgraph = [
+  "langgraph>=1.1,<2",
+]
 dev = [
   "httpx2>=2,<3",
   "hypothesis>=6.100,<7",
   "mypy>=1.10,<2",
-  "pytest>=8.2,<9",
-  "pytest-asyncio>=0.23,<1",
-  "pytest-cov>=5,<7",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1,<2",
+  "pytest-cov>=6,<8",
   "ruff>=0.5,<1",
   "types-PyYAML>=6.0,<7",
+  "langgraph>=1.1,<2",
 ]
 
 [project.scripts]

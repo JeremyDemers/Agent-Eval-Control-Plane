@@ -16,7 +16,7 @@ from aecontrol.models import (
     EvaluationSuite,
     utc_now,
 )
-from aecontrol.plugins import Evaluator
+from aecontrol.plugins import Evaluator, RuntimeAdapter
 from aecontrol.runtime import DeterministicCodingRuntime, RuntimeContext
 
 
@@ -26,8 +26,8 @@ def load_suite(path: Path) -> EvaluationSuite:
 
 
 class EvaluationEngine:
-    def __init__(self) -> None:
-        self._runtime = DeterministicCodingRuntime()
+    def __init__(self, runtime: RuntimeAdapter | None = None) -> None:
+        self._runtime = runtime or DeterministicCodingRuntime()
         self._evaluators: dict[str, Evaluator] = {
             cls.name: cast(Evaluator, cls()) for cls in EVALUATOR_CLASSES
         }
