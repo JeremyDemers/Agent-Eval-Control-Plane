@@ -5,6 +5,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from aecontrol.cli import _parse_labels, app
+from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig
 from aecontrol.openai_compatible import CompatibleModel
 
 
@@ -72,6 +73,44 @@ def test_nim_cli_commands(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     assert doctor.exit_code == 0
     assert "NVIDIA NIM" in doctor.output
     assert '"id": "meta/llama-test"' in payload.output
+
+
+def test_guardrails_cli_commands(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    async def configs(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return [GuardrailsConfig(id="content_safety")]
+
+    async def check(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return GuardrailEvidence(
+            config_id="content_safety",
+            model="meta/llama",
+            submitted_text="answer",
+            response_text="answer",
+            passed_through=True,
+        )
+
+    monkeypatch.setattr("aecontrol.cli.GuardrailsClient.configs", configs)
+    monkeypatch.setattr("aecontrol.cli.GuardrailsClient.check", check)
+    runner = CliRunner()
+    listed = runner.invoke(app, ["guardrails", "configs"])
+    checked = runner.invoke(
+        app,
+        [
+            "guardrails",
+            "check",
+            "--model",
+            "meta/llama",
+            "--config",
+            "content_safety",
+            "--input",
+            "question",
+            "--output",
+            "answer",
+        ],
+    )
+    assert listed.exit_code == 0
+    assert "content_safety" in listed.output
+    assert checked.exit_code == 0
+    assert '"passed_through": true' in checked.output
 
 
 def test_auth_cli_hashes_and_validates_configuration(tmp_path: Path) -> None:
