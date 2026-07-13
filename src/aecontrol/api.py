@@ -22,6 +22,10 @@ from starlette.responses import Response
 
 from aecontrol.auth import Authenticator, Principal
 from aecontrol.compare import compare_runs
+from aecontrol.database import (
+    DatabaseRuntimeConfiguration,
+    database_configuration_from_environment,
+)
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
 from aecontrol.guardrails import (
@@ -126,6 +130,7 @@ def create_app(
     input_root: str | Path | None = None,
     guardrails_client: GuardrailsClient | None = None,
     artifact_keyring: ArtifactKeyring | None = None,
+    database_config: DatabaseRuntimeConfiguration | None = None,
 ) -> FastAPI:
     resolved_database_url = database_url or os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
     resolved_input_root = Path(
@@ -134,7 +139,12 @@ def create_app(
     if not resolved_input_root.is_dir():
         raise ValueError(f"input root is not a directory: {resolved_input_root}")
     allowed_input_files = _index_input_files(resolved_input_root)
-    store = ArtifactStore(resolved_database_url, schema=schema, keyring=artifact_keyring)
+    store = ArtifactStore(
+        resolved_database_url,
+        schema=schema,
+        keyring=artifact_keyring,
+        database_config=database_config or database_configuration_from_environment(),
+    )
     guardrails = guardrails_client or GuardrailsClient()
     authenticator = Authenticator(auth_config)
     require_read = authenticator.require("read")
@@ -148,6 +158,7 @@ def create_app(
             store.initialize()
             yield
         finally:
+            store.close()
             shutdown_telemetry()
 
     application = FastAPI(
@@ -238,6 +249,7 @@ def create_app(
                 workers,
                 store.gpu_capacity_forecast(workers),
                 efficacy,
+                store.database_pool_snapshot(),
             ),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )

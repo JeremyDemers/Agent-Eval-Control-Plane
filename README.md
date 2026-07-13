@@ -141,6 +141,10 @@ Use `make serve PORT=8001` when port `8000` is already occupied.
 
 Set `DATABASE_URL` to use an existing PostgreSQL deployment. The default is shown in `.env.example`.
 API suite and policy files are restricted to `AECONTROL_INPUT_ROOT`, which defaults to `examples/`.
+Long-lived APIs and workers can enable bounded Psycopg connection pools, while direct mode remains
+available for PgBouncer and short-lived commands. Transaction-scoped advisory locks serialize schema
+initialization across replicas. See [`docs/database.md`](docs/database.md) for TLS, sizing, migration,
+and saturation-monitoring guidance.
 
 Operational endpoints provide database health, queue-aware readiness, Prometheus-compatible metrics,
 correlated request timing, and W3C Trace Context propagation. Queued jobs persist their originating
@@ -237,7 +241,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.32.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.33.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -421,8 +425,8 @@ model limits.
 The browser explorer is intentionally local-trust for this portfolio phase. The default process
 backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator;
-production MIG telemetry should be collected with DCGM. Managed database integration, additional
-hosted providers, object storage, and multi-tenancy remain in `docs/roadmap.md`.
+production MIG telemetry should be collected with DCGM. Database provisioning and failover,
+additional hosted providers, object storage, and multi-tenancy remain in `docs/roadmap.md`.
 
 ## Project Governance
 

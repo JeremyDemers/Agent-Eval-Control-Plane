@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from aecontrol.database import DatabasePoolSnapshot
 from aecontrol.guardrails import GuardrailEfficacyReport
 from aecontrol.models import (
     GateOutcome,
@@ -17,6 +18,7 @@ def render_prometheus(
     workers: Iterable[WorkerRecord] = (),
     gpu_capacity: GpuCapacityForecast | None = None,
     guardrail_efficacy: GuardrailEfficacyReport | None = None,
+    database_pool: DatabasePoolSnapshot | None = None,
 ) -> str:
     lines = [
         "# HELP aecontrol_runs_total Persisted evaluation runs.",
@@ -38,6 +40,22 @@ def render_prometheus(
         f'aecontrol_jobs{{status="{status.value}"}} {snapshot.job_counts.get(status.value, 0)}'
         for status in JobStatus
     )
+    if database_pool is not None:
+        lines.extend(
+            [
+                "# HELP aecontrol_database_pool_connections Database connections by pool state.",
+                "# TYPE aecontrol_database_pool_connections gauge",
+                f'aecontrol_database_pool_connections{{state="size"}} {database_pool.size}',
+                f'aecontrol_database_pool_connections{{state="available"}} {database_pool.available}',
+                "# HELP aecontrol_database_pool_limit Configured database connection pool bounds.",
+                "# TYPE aecontrol_database_pool_limit gauge",
+                f'aecontrol_database_pool_limit{{bound="minimum"}} {database_pool.minimum}',
+                f'aecontrol_database_pool_limit{{bound="maximum"}} {database_pool.maximum}',
+                "# HELP aecontrol_database_pool_waiting_requests Requests waiting for a database connection.",
+                "# TYPE aecontrol_database_pool_waiting_requests gauge",
+                f"aecontrol_database_pool_waiting_requests {database_pool.waiting}",
+            ]
+        )
     if guardrail_efficacy is not None:
         correct = sum(
             item.true_positives + item.true_negatives for item in guardrail_efficacy.versions

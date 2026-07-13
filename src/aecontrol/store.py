@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Literal, cast
@@ -12,8 +15,10 @@ from psycopg import sql
 from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
 
 from aecontrol.capacity import forecast_gpu_capacity
+from aecontrol.database import DatabasePoolSnapshot, DatabaseRuntimeConfiguration
 from aecontrol.guardrails import (
     GuardrailConfigActivation,
     GuardrailConfigVersion,
@@ -61,6 +66,7 @@ class ArtifactStore:
         database_url: str,
         schema: str = "public",
         keyring: ArtifactKeyring | None = None,
+        database_config: DatabaseRuntimeConfiguration | None = None,
     ) -> None:
         if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", schema):
             msg = f"invalid PostgreSQL schema name: {schema}"
@@ -68,20 +74,83 @@ class ArtifactStore:
         self.database_url = database_url
         self.schema = schema
         self.keyring = keyring if keyring is not None else ArtifactKeyring.from_environment()
+        self.database_config = database_config or DatabaseRuntimeConfiguration()
         self._initialized = False
+        self._closed = False
         self._initialize_lock = Lock()
+        self._pool: ConnectionPool[psycopg.Connection[dict[str, object]]] | None = None
+        if self.database_config.pooling_enabled:
+            self._pool = ConnectionPool(
+                self.database_url,
+                kwargs={"row_factory": dict_row},
+                min_size=self.database_config.pool_min_size,
+                max_size=self.database_config.pool_max_size,
+                timeout=self.database_config.pool_timeout_seconds,
+                max_waiting=self.database_config.pool_max_waiting,
+                check=ConnectionPool.check_connection,
+                configure=self._configure_pool_connection,
+                name="aecontrol-store",
+                open=False,
+            )
 
     def initialize(self) -> None:
+        if self._closed:
+            raise RuntimeError("artifact store is closed")
         if self._initialized:
             return
         with self._initialize_lock:
             if self._initialized:
                 return
-            self._initialize_schema()
-            self._initialized = True
+            try:
+                if self._pool is not None:
+                    self._pool.open()
+                    self._pool.wait(timeout=self.database_config.pool_timeout_seconds)
+                self._initialize_schema()
+                self._initialized = True
+            except BaseException:
+                if self._pool is not None:
+                    self._pool.close()
+                    self._closed = True
+                raise
+
+    def close(self) -> None:
+        with self._initialize_lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._pool is not None:
+                self._pool.close()
+
+    @property
+    def connection_mode(self) -> str:
+        return "pooled" if self._pool is not None else "direct"
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def database_pool_snapshot(self) -> DatabasePoolSnapshot | None:
+        if self._pool is None:
+            return None
+        stats = self._pool.get_stats()
+        return DatabasePoolSnapshot(
+            minimum=int(stats.get("pool_min", self.database_config.pool_min_size)),
+            maximum=int(stats.get("pool_max", self.database_config.pool_max_size)),
+            size=int(stats.get("pool_size", 0)),
+            available=int(stats.get("pool_available", 0)),
+            waiting=int(stats.get("requests_waiting", 0)),
+        )
 
     def _initialize_schema(self) -> None:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+        with self._connect() as connection:
+            connection.execute(
+                "SELECT set_config('lock_timeout', %s, true)",
+                (f"{self.database_config.migration_lock_timeout_seconds}s",),
+            )
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                (self._migration_lock_key(),),
+            )
             connection.execute(
                 sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema))
             )
@@ -319,10 +388,12 @@ class ArtifactStore:
                 connection.execute(
                     "INSERT INTO schema_metadata(version) VALUES (%s)", (SCHEMA_VERSION,)
                 )
-            elif int(row["version"]) in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
+                return
+            stored_version = cast(int, row["version"])
+            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
-            elif int(row["version"]) != SCHEMA_VERSION:
-                msg = f"unsupported database schema version: {row['version']}"
+            elif stored_version != SCHEMA_VERSION:
+                msg = f"unsupported database schema version: {stored_version}"
                 raise RuntimeError(msg)
 
     def save_run(self, run: EvaluationRun) -> None:
@@ -834,6 +905,7 @@ class ArtifactStore:
             "database": row["database"],
             "schema": self.schema,
             "schema_version": row["version"],
+            "connection_mode": self.connection_mode,
         }
 
     def operational_snapshot(self) -> OperationalSnapshot:
@@ -1348,10 +1420,23 @@ class ArtifactStore:
                     (artifact_digest(row["payload"]), row[id_column]),
                 )
 
-    def _connect(self) -> psycopg.Connection[dict[str, object]]:
-        connection = psycopg.connect(self.database_url, row_factory=dict_row)
+    @contextmanager
+    def _connect(self) -> Iterator[psycopg.Connection[dict[str, object]]]:
+        if self._pool is not None:
+            with self._pool.connection() as connection:
+                yield connection
+            return
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            self._set_search_path(connection)
+            yield connection
+
+    def _configure_pool_connection(self, connection: psycopg.Connection[dict[str, object]]) -> None:
         self._set_search_path(connection)
-        return connection
+        connection.commit()
+
+    def _migration_lock_key(self) -> int:
+        digest = hashlib.sha256(f"aecontrol-schema:{self.schema}".encode()).digest()
+        return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
     def _set_search_path(self, connection: psycopg.Connection[object]) -> None:
         connection.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(self.schema)))

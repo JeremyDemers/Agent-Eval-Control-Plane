@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from psycopg import sql
 
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key
+from aecontrol.database import DatabaseRuntimeConfiguration
 from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig, GuardrailsError
 from aecontrol.integrity import ArtifactKeyring
 from aecontrol.jobs import EvaluationWorker
@@ -33,7 +35,8 @@ def api_client(database_url: str) -> TestClient:
         connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
-def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
+@pytest.mark.parametrize("stored_version", [1, 10])
+def test_supported_schema_is_migrated_in_place(database_url: str, stored_version: int) -> None:
     schema = f"test_{uuid4().hex}"
     try:
         with psycopg.connect(database_url, autocommit=True) as connection:
@@ -44,14 +47,75 @@ def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
                 )
             )
             connection.execute(
-                sql.SQL("INSERT INTO {}.schema_metadata(version) VALUES (1)").format(
+                sql.SQL("INSERT INTO {}.schema_metadata(version) VALUES (%s)").format(
                     sql.Identifier(schema)
-                )
+                ),
+                (stored_version,),
             )
 
         store = ArtifactStore(database_url, schema=schema)
         assert store.health()["schema_version"] == 11
     finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
+def test_pooled_api_lifecycle_serves_concurrent_health_checks(database_url: str) -> None:
+    schema = f"test_{uuid4().hex}"
+    configuration = DatabaseRuntimeConfiguration(
+        pool_min_size=1,
+        pool_max_size=3,
+        pool_timeout_seconds=2,
+        pool_max_waiting=10,
+    )
+    store: ArtifactStore | None = None
+    try:
+        with TestClient(
+            create_app(database_url, schema=schema, database_config=configuration)
+        ) as client:
+            store = client.app.state.store
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                responses = list(executor.map(lambda _: client.get("/healthz"), range(12)))
+            assert all(response.status_code == 200 for response in responses)
+            assert all(response.json()["connection_mode"] == "pooled" for response in responses)
+            metrics = client.get("/metrics")
+            assert metrics.status_code == 200
+            assert 'aecontrol_database_pool_limit{bound="maximum"} 3' in metrics.text
+            assert "aecontrol_database_pool_waiting_requests" in metrics.text
+            assert store.closed is False
+        assert store.closed is True
+        with pytest.raises(RuntimeError, match="artifact store is closed"):
+            store.health()
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
+def test_schema_initialization_waits_for_database_advisory_lock(database_url: str) -> None:
+    schema = f"test_{uuid4().hex}"
+    store = ArtifactStore(
+        database_url,
+        schema=schema,
+        database_config=DatabaseRuntimeConfiguration(migration_lock_timeout_seconds=2),
+    )
+    try:
+        with (
+            psycopg.connect(database_url) as blocker,
+            ThreadPoolExecutor(max_workers=1) as executor,
+        ):
+            blocker.execute("SELECT pg_advisory_xact_lock(%s)", (store._migration_lock_key(),))
+            initialization = executor.submit(store.initialize)
+            time.sleep(0.1)
+            assert initialization.done() is False
+            blocker.commit()
+            initialization.result(timeout=2)
+        assert store.health()["connection_mode"] == "direct"
+    finally:
+        store.close()
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
                 sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))

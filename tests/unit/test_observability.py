@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+from aecontrol.database import DatabasePoolSnapshot
 from aecontrol.guardrails import GuardrailEfficacyMetrics, GuardrailEfficacyReport
 from aecontrol.models import (
     GpuCapacityForecast,
@@ -106,7 +107,8 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
             )
         ],
     )
-    payload = render_prometheus(snapshot, [worker], capacity, efficacy)
+    pool = DatabasePoolSnapshot(minimum=1, maximum=8, size=3, available=2, waiting=1)
+    payload = render_prometheus(snapshot, [worker], capacity, efficacy, pool)
 
     assert "aecontrol_runs_total 3" in payload
     assert "aecontrol_guardrail_evidence_total 4" in payload
@@ -140,3 +142,7 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
     assert "aecontrol_guardrail_label_coverage 0.800000" in payload
     assert "aecontrol_guardrail_policy_accuracy 0.750000" in payload
     assert "aecontrol_guardrail_false_positive_rate 0.333333" in payload
+    assert 'aecontrol_database_pool_connections{state="size"} 3' in payload
+    assert 'aecontrol_database_pool_connections{state="available"} 2' in payload
+    assert 'aecontrol_database_pool_limit{bound="maximum"} 8' in payload
+    assert "aecontrol_database_pool_waiting_requests 1" in payload

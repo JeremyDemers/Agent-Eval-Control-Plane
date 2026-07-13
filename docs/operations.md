@@ -21,6 +21,9 @@ clearance-wave count without job IDs, model names, or worker assignments as labe
 Historical duration gauges use only the bounded MIG profile request class plus fixed average/p90
 dimensions. The clearance ETA series is omitted when history is incomplete instead of exporting a
 sentinel or `NaN`.
+When the in-process PostgreSQL pool is enabled, connection size, availability, configured bounds, and
+waiting requests are exported as low-cardinality gauges. Direct/PgBouncer mode omits those series.
+See [`database.md`](database.md) for sizing and migration-lock behavior.
 
 Every HTTP response includes `X-Request-ID` and `Server-Timing`. A caller-supplied request ID is
 preserved when it contains at most 64 alphanumeric, dot, underscore, or hyphen characters; otherwise

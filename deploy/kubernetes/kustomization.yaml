@@ -8,7 +8,7 @@ resources:
   - workers.yaml
 images:
   - name: ghcr.io/jeremydemers/agent-eval-control-plane
-    newTag: 0.32.0
+    newTag: 0.33.0
 labels:
   - includeSelectors: true
     pairs:

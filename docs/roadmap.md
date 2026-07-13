@@ -34,10 +34,11 @@ Implemented ahead of the original four-day scope:
 - LangGraph v2 runtime interoperability with graph-node, subgraph, tool, and failure evidence
 - Batched OpenTelemetry OTLP/HTTP trace export across API and durable worker boundaries
 - Digest-enforced Podman sandboxes with configurable seccomp/AppArmor policy and hardened GPU pods
+- Bounded PostgreSQL connection pools, saturation metrics, and advisory-locked schema initialization
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
-- Production database/operator integration and seasonal GPU demand prediction
+- PostgreSQL operator/provisioning integration and seasonal GPU demand prediction
 - Additional hosted provider authentication and endpoint-specific adapters
 - Multi-tenancy, immutable object storage, and KMS/asymmetric attestations
