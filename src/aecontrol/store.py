@@ -10,6 +10,11 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from aecontrol.guardrails import (
+    GuardrailEvidence,
+    StoredGuardrailEvidence,
+    StoredGuardrailEvidenceSummary,
+)
 from aecontrol.integrity import ArtifactIntegrityError, artifact_digest
 from aecontrol.models import (
     Accelerator,
@@ -30,7 +35,7 @@ from aecontrol.models import (
 )
 from aecontrol.placement import diagnose_placement
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class ArtifactStore:
@@ -110,6 +115,27 @@ class ArtifactStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS guardrail_evidence (
+                    evidence_id UUID PRIMARY KEY,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    config_id TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    passed_through BOOLEAN NOT NULL,
+                    payload JSONB NOT NULL,
+                    payload_sha256 TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_guardrail_evidence_created_at
+                   ON guardrail_evidence(created_at DESC)"""
+            )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_guardrail_evidence_config
+                   ON guardrail_evidence(config_id, created_at DESC)"""
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS evaluation_jobs (
                     job_id UUID PRIMARY KEY,
                     suite_path TEXT NOT NULL,
@@ -176,7 +202,7 @@ class ArtifactStore:
                 connection.execute(
                     "INSERT INTO schema_metadata(version) VALUES (%s)", (SCHEMA_VERSION,)
                 )
-            elif int(row["version"]) in {1, 2, 3}:
+            elif int(row["version"]) in {1, 2, 3, 4}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif int(row["version"]) != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {row['version']}"
@@ -288,14 +314,68 @@ class ArtifactStore:
         self._verify_artifact("comparison", comparison_id, row["payload_sha256"], row["payload"])
         return StoredComparison.model_validate(row["payload"])
 
+    def save_guardrail_evidence(self, evidence: GuardrailEvidence) -> StoredGuardrailEvidence:
+        self.initialize()
+        artifact = StoredGuardrailEvidence(evidence=evidence)
+        payload = artifact.model_dump(mode="json")
+        digest = artifact_digest(payload)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO guardrail_evidence (
+                    evidence_id, created_at, config_id, model, passed_through,
+                    payload, payload_sha256
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    artifact.evidence_id,
+                    artifact.created_at,
+                    evidence.config_id,
+                    evidence.model,
+                    evidence.passed_through,
+                    Jsonb(payload),
+                    digest,
+                ),
+            )
+        return artifact
+
+    def get_guardrail_evidence(self, evidence_id: UUID) -> StoredGuardrailEvidence:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload, payload_sha256 FROM guardrail_evidence WHERE evidence_id = %s",
+                (evidence_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(str(evidence_id))
+        self._verify_artifact(
+            "guardrail_evidence", evidence_id, row["payload_sha256"], row["payload"]
+        )
+        return StoredGuardrailEvidence.model_validate(row["payload"])
+
+    def list_guardrail_evidence(self, limit: int = 100) -> list[StoredGuardrailEvidenceSummary]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT evidence_id, created_at, config_id, model, passed_through
+                FROM guardrail_evidence ORDER BY created_at DESC LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+        return [StoredGuardrailEvidenceSummary.model_validate(row) for row in rows]
+
     def verify_artifacts(self) -> ArtifactIntegrityReport:
         self.initialize()
         failures: list[ArtifactIntegrityItem] = []
         checked = 0
         with self._connect() as connection:
-            sources: tuple[tuple[str, str, Literal["run", "comparison"]], ...] = (
+            sources: tuple[
+                tuple[str, str, Literal["run", "comparison", "guardrail_evidence"]], ...
+            ] = (
                 ("evaluation_runs", "run_id", "run"),
                 ("comparisons", "comparison_id", "comparison"),
+                ("guardrail_evidence", "evidence_id", "guardrail_evidence"),
             )
             for table, id_column, artifact_type in sources:
                 rows = connection.execute(

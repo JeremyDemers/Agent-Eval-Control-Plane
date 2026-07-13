@@ -140,7 +140,10 @@ async usage.
 
 ```mermaid
 flowchart LR
-  Clients[CLI / REST / Trace Explorer] --> API[FastAPI Control Plane]
+  Clients[CLI / SDK / REST / Trace Explorer] --> API[FastAPI Control Plane]
+  API --> Guardrails[NVIDIA NeMo Guardrails]
+  Guardrails --> Evidence[Guardrail Evidence]
+  Evidence --> PG
   API --> Queue[(PostgreSQL Job Queue)]
   Queue --> Workers[Leased Workers]
   Hardware[NVIDIA GPU / CPU Capabilities] --> Workers
@@ -196,7 +199,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.20.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.21.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -279,14 +282,20 @@ and credential boundaries.
 
 ## NeMo Guardrails Evidence
 
-The typed NeMo Guardrails client discovers server configurations and checks agent input/output pairs
-with input and output rails only. Evidence records exact pass-through versus intervention, activated
-rails, and server statistics without relying on a provider-specific refusal phrase.
+The typed NeMo Guardrails integration discovers server configurations and checks agent input/output
+pairs with input and output rails only. Successful control-plane checks become indexed PostgreSQL
+artifacts with stable IDs, timestamps, canonical SHA-256 digests, and fail-closed retrieval. Evidence
+records exact pass-through versus intervention, activated rails, and server statistics without relying
+on a provider-specific refusal phrase.
 
 ```bash
 uv run aecontrol guardrails configs
 uv run aecontrol guardrails check --model meta/llama-3.1-8b-instruct \
   --config content_safety --input "request" --output "agent response"
+
+curl -X POST http://127.0.0.1:8000/api/v1/guardrails/check \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"meta/llama-3.1-8b-instruct","config_id":"content_safety","input_text":"request","output_text":"agent response"}'
 ```
 
 See [`docs/nemo-guardrails.md`](docs/nemo-guardrails.md) for evidence semantics and log sensitivity.
@@ -307,15 +316,17 @@ See [`docs/authentication.md`](docs/authentication.md) for configuration and rot
 
 ## Tamper-Evident Artifacts
 
-Persisted runs and comparisons carry canonical SHA-256 digests. Reads fail closed on a mismatch, and
-operators can audit the full evidence store without returning artifact payloads.
+Persisted runs, comparisons, and NeMo Guardrails checks carry canonical SHA-256 digests. Reads fail
+closed on a mismatch, and operators can audit the full evidence store without returning artifact
+payloads.
 
 ```bash
 uv run aecontrol store verify
 curl http://127.0.0.1:8000/api/v1/integrity
 ```
 
-Schema v4 backfills existing PostgreSQL artifacts and adds durable trace correlation in place. See
+Schema v5 adds indexed Guardrails evidence while retaining in-place upgrades and digest backfills for
+older evaluation artifacts. See
 [`docs/artifact-integrity.md`](docs/artifact-integrity.md) for the threat model and signature limits.
 
 ## Current Limitations

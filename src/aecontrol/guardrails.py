@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
@@ -28,6 +30,20 @@ class GuardrailEvidence(BaseModel):
     passed_through: bool
     activated_rails: Any = Field(default_factory=list)
     stats: dict[str, Any] = Field(default_factory=dict)
+
+
+class StoredGuardrailEvidence(BaseModel):
+    evidence_id: UUID = Field(default_factory=uuid4)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    evidence: GuardrailEvidence
+
+
+class StoredGuardrailEvidenceSummary(BaseModel):
+    evidence_id: UUID
+    created_at: datetime
+    config_id: str
+    model: str
+    passed_through: bool
 
 
 class GuardrailsClient:

@@ -1,7 +1,7 @@
 # Artifact Integrity
 
-AgentEval stores complete evaluation runs and release comparisons as PostgreSQL JSONB evidence.
-Schema v3 adds a SHA-256 digest beside each payload. Digests use recursively sorted canonical JSON,
+AgentEval stores complete evaluation runs, release comparisons, and NeMo Guardrails checks as
+PostgreSQL JSONB evidence. SHA-256 digests use recursively sorted canonical JSON,
 normalized signed zero, compact separators, ASCII escaping, and rejection of non-finite numbers.
 
 New writes persist the payload and digest in one transaction. Full artifact reads recompute and
@@ -15,8 +15,8 @@ curl http://127.0.0.1:8000/api/v1/integrity
 
 The audit reports checked and valid counts plus artifact type, ID, stored digest, and computed digest
 for failures. It never returns artifact payloads. Schema-v1 and schema-v2 databases are upgraded in
-place: missing digests are calculated from the stored JSONB representation before the columns become
-non-null and the schema version advances.
+place: missing run and comparison digests are calculated from the stored JSONB representation before
+the columns become non-null. Schema v5 adds indexed Guardrails evidence to the same audit contract.
 
 SHA-256 provides tamper evidence against accidental changes and database writes outside the control
 plane. It is not a digital signature and does not protect against an attacker who can modify both the
