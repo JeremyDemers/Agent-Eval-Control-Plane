@@ -152,6 +152,8 @@ class AgentEvalClient:
         labels: dict[str, str] | None = None,
         minimum_gpu_memory_mb: int = 0,
         minimum_cuda_compute_capability: float | None = None,
+        minimum_gpu_memory_available_mb: int = 0,
+        maximum_gpu_utilization_percent: float | None = None,
     ) -> EvaluationJob:
         payload = {
             "suite_path": suite_path,
@@ -162,6 +164,8 @@ class AgentEvalClient:
             "required_labels": labels or {},
             "minimum_gpu_memory_mb": minimum_gpu_memory_mb,
             "minimum_cuda_compute_capability": minimum_cuda_compute_capability,
+            "minimum_gpu_memory_available_mb": minimum_gpu_memory_available_mb,
+            "maximum_gpu_utilization_percent": maximum_gpu_utilization_percent,
         }
         return EvaluationJob.model_validate(self.transport.request("POST", "/api/v1/jobs", payload))
 
@@ -288,6 +292,8 @@ class AsyncAgentEvalClient:
         labels: dict[str, str] | None = None,
         minimum_gpu_memory_mb: int = 0,
         minimum_cuda_compute_capability: float | None = None,
+        minimum_gpu_memory_available_mb: int = 0,
+        maximum_gpu_utilization_percent: float | None = None,
     ) -> EvaluationJob:
         return await asyncio.to_thread(
             self._sync.enqueue_job,
@@ -299,6 +305,8 @@ class AsyncAgentEvalClient:
             labels=labels,
             minimum_gpu_memory_mb=minimum_gpu_memory_mb,
             minimum_cuda_compute_capability=minimum_cuda_compute_capability,
+            minimum_gpu_memory_available_mb=minimum_gpu_memory_available_mb,
+            maximum_gpu_utilization_percent=maximum_gpu_utilization_percent,
         )
 
     async def get_job(self, job_id: UUID) -> EvaluationJob:

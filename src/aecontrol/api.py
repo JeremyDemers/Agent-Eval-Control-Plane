@@ -75,6 +75,8 @@ class EvaluationJobRequest(BaseModel):
     required_labels: dict[str, str] = Field(default_factory=dict)
     minimum_gpu_memory_mb: int = Field(default=0, ge=0)
     minimum_cuda_compute_capability: float | None = Field(default=None, ge=1)
+    minimum_gpu_memory_available_mb: int = Field(default=0, ge=0)
+    maximum_gpu_utilization_percent: float | None = Field(default=None, ge=0, le=100)
 
 
 class GuardrailCheckRequest(BaseModel):
@@ -302,14 +304,16 @@ def create_app(
             return store.enqueue_job(
                 str(suite_path),
                 request.agent_version,
-                request.priority,
-                request.max_attempts,
-                request.required_accelerator,
-                request.required_labels,
-                request.minimum_gpu_memory_mb,
-                request.minimum_cuda_compute_capability,
-                http_request.state.traceparent,
-                http_request.state.request_id,
+                priority=request.priority,
+                max_attempts=request.max_attempts,
+                required_accelerator=request.required_accelerator,
+                required_labels=request.required_labels,
+                minimum_gpu_memory_mb=request.minimum_gpu_memory_mb,
+                minimum_cuda_compute_capability=request.minimum_cuda_compute_capability,
+                minimum_gpu_memory_available_mb=request.minimum_gpu_memory_available_mb,
+                maximum_gpu_utilization_percent=request.maximum_gpu_utilization_percent,
+                traceparent=http_request.state.traceparent,
+                request_id=http_request.state.request_id,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -589,6 +593,10 @@ def _job_requirement(job: EvaluationJob) -> str:
         requirements.append(f">={job.minimum_gpu_memory_mb} MiB")
     if job.minimum_cuda_compute_capability is not None:
         requirements.append(f"CC >={job.minimum_cuda_compute_capability:g}")
+    if job.minimum_gpu_memory_available_mb:
+        requirements.append(f">={job.minimum_gpu_memory_available_mb} MiB free")
+    if job.maximum_gpu_utilization_percent is not None:
+        requirements.append(f"util <={job.maximum_gpu_utilization_percent:g}%")
     return ", ".join(requirements)
 
 

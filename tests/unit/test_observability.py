@@ -55,6 +55,8 @@ def test_prometheus_rendering_includes_zero_value_dimensions() -> None:
     assert 'worker="worker-\\"one\\""' in payload
     assert "aecontrol_gpu_memory_used_bytes" in payload
     assert "4194304000" in payload
+    assert "aecontrol_gpu_memory_available_bytes" in payload
+    assert "12582912000" in payload
     assert "aecontrol_gpu_utilization_ratio" in payload
     assert "0.250000" in payload
     assert "aecontrol_gpu_temperature_celsius" in payload

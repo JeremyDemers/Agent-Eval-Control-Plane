@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 
 from aecontrol.cli import _parse_labels, app
 from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig
+from aecontrol.models import Accelerator, EvaluationJob
 from aecontrol.openai_compatible import CompatibleModel
 
 
@@ -42,6 +43,55 @@ def test_label_parser_rejects_invalid_values() -> None:
     )
     assert result.exit_code == 2
     assert "labels must use key=value syntax" in result.output
+
+
+def test_gpu_load_options_are_forwarded_and_rendered(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    captured: dict[str, object] = {}
+    job = EvaluationJob(
+        suite_path="suite.yaml",
+        agent_version="baseline",
+        required_accelerator=Accelerator.CUDA,
+        minimum_gpu_memory_available_mb=4096,
+        maximum_gpu_utilization_percent=25,
+    )
+
+    class Store:
+        def __init__(self, _database_url: str) -> None:
+            pass
+
+        def enqueue_job(self, *_args, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            return job
+
+        def list_jobs(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return [job]
+
+    monkeypatch.setattr("aecontrol.cli.ArtifactStore", Store)
+    runner = CliRunner()
+    queued = runner.invoke(
+        app,
+        [
+            "jobs",
+            "enqueue",
+            "--suite",
+            "suite.yaml",
+            "--agent-version",
+            "baseline",
+            "--accelerator",
+            "cuda",
+            "--minimum-gpu-memory-available-mb",
+            "4096",
+            "--maximum-gpu-utilization-percent",
+            "25",
+        ],
+    )
+    listed = runner.invoke(app, ["jobs", "list"])
+
+    assert queued.exit_code == 0
+    assert captured["minimum_gpu_memory_available_mb"] == 4096
+    assert captured["maximum_gpu_utilization_percent"] == 25
+    assert "gpu_free>=4096MiB utilization<=25%" in listed.output
+    assert "gpu_memory" not in listed.output
 
 
 def test_openai_compatible_cli_commands(monkeypatch) -> None:  # type: ignore[no-untyped-def]

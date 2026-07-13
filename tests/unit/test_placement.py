@@ -107,3 +107,63 @@ def test_diagnostic_summarizes_empty_terminal_jobs_and_validates_window() -> Non
     ]
     with pytest.raises(ValueError, match="window must be positive"):
         diagnose_placement(job, [], now=NOW, active_within_seconds=0)
+
+
+def test_diagnostic_explains_live_gpu_load_and_requires_one_device() -> None:
+    job = EvaluationJob(
+        suite_path="suite.yaml",
+        agent_version="baseline",
+        required_accelerator=Accelerator.CUDA,
+        minimum_gpu_memory_available_mb=8000,
+        maximum_gpu_utilization_percent=30,
+    )
+    split = _worker(
+        "split-load",
+        accelerators=[Accelerator.CPU, Accelerator.CUDA],
+        gpus=[
+            GpuDevice(
+                name="free-busy",
+                memory_total_mb=24000,
+                memory_used_mb=1000,
+                utilization_percent=90,
+                compute_capability="9.0",
+            ),
+            GpuDevice(
+                name="idle-full",
+                memory_total_mb=24000,
+                memory_used_mb=20000,
+                utilization_percent=5,
+                compute_capability="9.0",
+            ),
+        ],
+    )
+    missing = _worker(
+        "missing-load",
+        accelerators=[Accelerator.CPU, Accelerator.CUDA],
+        gpus=[GpuDevice(name="unknown", memory_total_mb=24000, compute_capability="9.0")],
+    )
+    qualified = _worker(
+        "qualified-load",
+        accelerators=[Accelerator.CPU, Accelerator.CUDA],
+        gpus=[
+            GpuDevice(
+                name="available",
+                memory_total_mb=24000,
+                memory_used_mb=4000,
+                utilization_percent=20,
+                compute_capability="9.0",
+            )
+        ],
+    )
+
+    diagnostic = diagnose_placement(job, [split, missing, qualified], now=NOW)
+
+    assert diagnostic.matching_workers == 1
+    assert diagnostic.workers[0].reasons == [
+        "no single GPU satisfies all capacity, compute, and load requirements"
+    ]
+    assert diagnostic.workers[1].reasons == [
+        "GPU free-memory telemetry is unavailable",
+        "GPU utilization telemetry is unavailable",
+    ]
+    assert diagnostic.workers[2].eligible is True

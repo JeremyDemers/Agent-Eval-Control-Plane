@@ -49,7 +49,7 @@ def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 5
+        assert store.health()["schema_version"] == 6
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -117,7 +117,7 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 5
+    assert health.json()["schema_version"] == 6
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")
@@ -520,6 +520,106 @@ def test_gpu_resource_constraints_are_atomically_admitted(api_client: TestClient
             "suite_path": "examples/suites/coding_repair.yaml",
             "agent_version": "baseline",
             "minimum_gpu_memory_mb": 1000,
+        },
+    )
+    assert invalid.status_code == 422
+    assert "require the cuda accelerator" in invalid.json()["detail"]
+
+
+def test_live_gpu_load_constraints_are_atomically_admitted(api_client: TestClient) -> None:
+    store: ArtifactStore = api_client.app.state.store
+    constrained = store.enqueue_job(
+        "examples/suites/coding_repair.yaml",
+        "baseline",
+        required_accelerator=Accelerator.CUDA,
+        minimum_gpu_memory_mb=16000,
+        minimum_gpu_memory_available_mb=8000,
+        maximum_gpu_utilization_percent=30,
+    )
+    base = WorkerCapabilities(
+        hostname="gpu-host",
+        operating_system="linux",
+        architecture="x86_64",
+        cpu_count=8,
+        accelerators=[Accelerator.CPU, Accelerator.CUDA],
+    )
+    saturated = base.model_copy(
+        update={
+            "gpus": [
+                GpuDevice(
+                    name="Busy GPU",
+                    memory_total_mb=24576,
+                    memory_used_mb=20000,
+                    utilization_percent=95,
+                    compute_capability="8.9",
+                )
+            ]
+        }
+    )
+    assert store.lease_job("busy-worker", capabilities=saturated) is None
+    assert store.get_job(constrained.job_id).attempts == 0
+
+    missing = base.model_copy(
+        update={
+            "gpus": [
+                GpuDevice(name="Unknown Load", memory_total_mb=24576, compute_capability="8.9")
+            ]
+        }
+    )
+    store.register_worker("unknown-worker", missing)
+    diagnostic = api_client.get(f"/api/v1/jobs/{constrained.job_id}/placement").json()
+    assert diagnostic["workers"][0]["reasons"] == [
+        "GPU free-memory telemetry is unavailable",
+        "GPU utilization telemetry is unavailable",
+    ]
+
+    split = base.model_copy(
+        update={
+            "gpus": [
+                GpuDevice(
+                    name="Free but Busy",
+                    memory_total_mb=24576,
+                    memory_used_mb=1000,
+                    utilization_percent=90,
+                    compute_capability="8.9",
+                ),
+                GpuDevice(
+                    name="Idle but Full",
+                    memory_total_mb=24576,
+                    memory_used_mb=20000,
+                    utilization_percent=5,
+                    compute_capability="8.9",
+                ),
+            ]
+        }
+    )
+    assert store.lease_job("split-load-worker", capabilities=split) is None
+
+    available = base.model_copy(
+        update={
+            "gpus": [
+                GpuDevice(
+                    name="Available GPU",
+                    memory_total_mb=24576,
+                    memory_used_mb=4096,
+                    utilization_percent=20,
+                    compute_capability="8.9",
+                )
+            ]
+        }
+    )
+    claimed = store.lease_job("available-worker", capabilities=available)
+    assert claimed is not None
+    assert claimed.job_id == constrained.job_id
+    assert claimed.minimum_gpu_memory_available_mb == 8000
+    assert claimed.maximum_gpu_utilization_percent == 30
+
+    invalid = api_client.post(
+        "/api/v1/jobs",
+        json={
+            "suite_path": "examples/suites/coding_repair.yaml",
+            "agent_version": "baseline",
+            "maximum_gpu_utilization_percent": 20,
         },
     )
     assert invalid.status_code == 422

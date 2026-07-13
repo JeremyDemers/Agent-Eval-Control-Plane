@@ -46,6 +46,8 @@ def render_prometheus(snapshot: OperationalSnapshot, workers: Iterable[WorkerRec
             "# TYPE aecontrol_gpu_memory_total_bytes gauge",
             "# HELP aecontrol_gpu_memory_used_bytes GPU framebuffer memory in use.",
             "# TYPE aecontrol_gpu_memory_used_bytes gauge",
+            "# HELP aecontrol_gpu_memory_available_bytes GPU framebuffer memory currently available.",
+            "# TYPE aecontrol_gpu_memory_available_bytes gauge",
             "# HELP aecontrol_gpu_utilization_ratio GPU utilization from zero to one.",
             "# TYPE aecontrol_gpu_utilization_ratio gauge",
             "# HELP aecontrol_gpu_temperature_celsius GPU temperature in degrees Celsius.",
@@ -75,6 +77,10 @@ def render_prometheus(snapshot: OperationalSnapshot, workers: Iterable[WorkerRec
         if gpu.memory_used_mb is not None:
             lines.append(
                 f"aecontrol_gpu_memory_used_bytes{{{labels}}} {gpu.memory_used_mb * 1024**2}"
+            )
+            available_mb = max(0, gpu.memory_total_mb - gpu.memory_used_mb)
+            lines.append(
+                f"aecontrol_gpu_memory_available_bytes{{{labels}}} {available_mb * 1024**2}"
             )
         if gpu.utilization_percent is not None:
             lines.append(

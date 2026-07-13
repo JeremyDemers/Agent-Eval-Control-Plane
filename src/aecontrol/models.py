@@ -308,6 +308,8 @@ class EvaluationJob(BaseModel):
     required_labels: dict[str, str] = Field(default_factory=dict)
     minimum_gpu_memory_mb: int = Field(default=0, ge=0)
     minimum_cuda_compute_capability: float | None = Field(default=None, ge=1)
+    minimum_gpu_memory_available_mb: int = Field(default=0, ge=0)
+    maximum_gpu_utilization_percent: float | None = Field(default=None, ge=0, le=100)
     traceparent: str | None = Field(
         default=None, pattern=r"^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
     )
@@ -316,7 +318,10 @@ class EvaluationJob(BaseModel):
     @model_validator(mode="after")
     def gpu_constraints_require_cuda(self) -> EvaluationJob:
         if (
-            self.minimum_gpu_memory_mb > 0 or self.minimum_cuda_compute_capability is not None
+            self.minimum_gpu_memory_mb > 0
+            or self.minimum_cuda_compute_capability is not None
+            or self.minimum_gpu_memory_available_mb > 0
+            or self.maximum_gpu_utilization_percent is not None
         ) and self.required_accelerator != Accelerator.CUDA:
             raise ValueError("GPU resource constraints require the cuda accelerator")
         return self
