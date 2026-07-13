@@ -30,7 +30,7 @@ from aecontrol.guardrails import (
     StoredGuardrailEvidence,
     StoredGuardrailEvidenceSummary,
 )
-from aecontrol.integrity import ArtifactIntegrityError
+from aecontrol.integrity import ArtifactKeyring, ArtifactVerificationError
 from aecontrol.models import (
     Accelerator,
     ArtifactIntegrityReport,
@@ -92,6 +92,7 @@ def create_app(
     auth_config: str | Path | None = None,
     input_root: str | Path | None = None,
     guardrails_client: GuardrailsClient | None = None,
+    artifact_keyring: ArtifactKeyring | None = None,
 ) -> FastAPI:
     resolved_database_url = database_url or os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
     resolved_input_root = Path(
@@ -100,7 +101,7 @@ def create_app(
     if not resolved_input_root.is_dir():
         raise ValueError(f"input root is not a directory: {resolved_input_root}")
     allowed_input_files = _index_input_files(resolved_input_root)
-    store = ArtifactStore(resolved_database_url, schema=schema)
+    store = ArtifactStore(resolved_database_url, schema=schema, keyring=artifact_keyring)
     guardrails = guardrails_client or GuardrailsClient()
     authenticator = Authenticator(auth_config)
     require_read = authenticator.require("read")
@@ -267,7 +268,7 @@ def create_app(
             raise HTTPException(
                 status_code=404, detail="guardrail evidence was not found"
             ) from error
-        except ArtifactIntegrityError as error:
+        except ArtifactVerificationError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.get("/api/v1/runs", response_model=list[StoredRunSummary], tags=["runs"])
@@ -424,7 +425,7 @@ def create_app(
             return store.get_comparison(comparison_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="comparison was not found") from error
-        except ArtifactIntegrityError as error:
+        except ArtifactVerificationError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -450,7 +451,7 @@ def create_app(
             artifact = store.get_comparison(comparison_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="comparison was not found") from error
-        except ArtifactIntegrityError as error:
+        except ArtifactVerificationError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         return _render_comparison(artifact)
 
@@ -466,7 +467,7 @@ def create_app(
             raise HTTPException(
                 status_code=404, detail="guardrail evidence was not found"
             ) from error
-        except ArtifactIntegrityError as error:
+        except ArtifactVerificationError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         return _render_guardrail_evidence(artifact)
 
@@ -501,7 +502,7 @@ def _get_run(store: ArtifactStore, run_id: UUID) -> EvaluationRun:
         return store.get_run(run_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail="run was not found") from error
-    except ArtifactIntegrityError as error:
+    except ArtifactVerificationError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 

@@ -65,6 +65,7 @@
 - Durable NeMo Guardrails evidence with PostgreSQL integrity verification, REST, and sync/async SDKs.
 - Load-aware NVIDIA GPU admission using live free memory and utilization on one device.
 - Browser Guardrails evidence explorer with escaped diagnostics and safety metrics.
+- Rotation-aware HMAC-SHA256 signatures for runs, comparisons, and Guardrails evidence.
 
 ## Verification
 

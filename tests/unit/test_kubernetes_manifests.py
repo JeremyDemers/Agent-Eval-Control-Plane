@@ -51,6 +51,12 @@ def test_kubernetes_workloads_enforce_operational_contracts() -> None:
     assert gpu["resources"]["limits"]["nvidia.com/gpu"] == "1"
     assert "pool=kubernetes-gpu" in gpu["command"]
 
+    for name in ("api", "cpu-worker", "gpu-worker"):
+        container = by_name[("Deployment", name)]["spec"]["template"]["spec"]["containers"][0]
+        env = {item["name"]: item["valueFrom"]["secretKeyRef"] for item in container["env"]}
+        assert env["AECONTROL_ARTIFACT_SIGNING_KEY_ID"]["key"] == "artifact-signing-key-id"
+        assert env["AECONTROL_ARTIFACT_SIGNING_KEYS"]["key"] == "artifact-signing-keys"
+
 
 def test_kustomization_pins_release_image_and_secret_is_not_committed() -> None:
     kustomization = yaml.safe_load((MANIFEST_ROOT / "kustomization.yaml").read_text())
@@ -65,6 +71,8 @@ def test_kustomization_pins_release_image_and_secret_is_not_committed() -> None:
     secret = yaml.safe_load((MANIFEST_ROOT / "secret.example.yaml").read_text())
     assert secret["stringData"]["password"] == "replace-me"
     assert secret["stringData"]["nvidia-api-key"] == "replace-me"
+    assert secret["stringData"]["artifact-signing-key-id"] == "portfolio-2026-07"
+    assert "portfolio-2026-07" in secret["stringData"]["artifact-signing-keys"]
 
 
 def test_keda_overlay_scales_cpu_and_gpu_queues_independently() -> None:

@@ -35,6 +35,12 @@ spec:
             - name: NVIDIA_API_KEY
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: nvidia-api-key}
+            - name: AECONTROL_ARTIFACT_SIGNING_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: aecontrol-database, key: artifact-signing-key-id}
+            - name: AECONTROL_ARTIFACT_SIGNING_KEYS
+              valueFrom:
+                secretKeyRef: {name: aecontrol-database, key: artifact-signing-keys}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
@@ -67,6 +73,12 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: database-url}
+            - name: AECONTROL_ARTIFACT_SIGNING_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: aecontrol-database, key: artifact-signing-key-id}
+            - name: AECONTROL_ARTIFACT_SIGNING_KEYS
+              valueFrom:
+                secretKeyRef: {name: aecontrol-database, key: artifact-signing-keys}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}

@@ -282,11 +282,15 @@ class ArtifactIntegrityItem(BaseModel):
     valid: bool
     expected_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     actual_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    failure_kind: Literal["digest", "signature", "missing_signing_key"] = "digest"
+    signing_key_id: str | None = None
 
 
 class ArtifactIntegrityReport(BaseModel):
     checked: int = Field(ge=0)
     valid: int = Field(ge=0)
+    signed: int = Field(default=0, ge=0)
+    unsigned: int = Field(default=0, ge=0)
     failures: list[ArtifactIntegrityItem]
 
 

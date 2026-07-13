@@ -9,14 +9,19 @@ Create the database secret before applying the base:
 
 ```bash
 cp deploy/kubernetes/secret.example.yaml /tmp/aecontrol-secret.yaml
-# Replace every occurrence of replace-me, then:
+# Replace every placeholder, including the generated artifact signing key, then:
 kubectl apply -f /tmp/aecontrol-secret.yaml
 kubectl apply -k deploy/kubernetes
 kubectl -n aecontrol rollout status deployment/api
 kubectl -n aecontrol port-forward service/api 8000:8000
 ```
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.23.0`. Tagged releases publish
+The API and both worker pools receive the same external artifact-signing keyring from the Secret.
+During rotation, retain old keys in `artifact-signing-keys`, change `artifact-signing-key-id`, and
+restart every workload before verifying the store. A production cluster should source these values
+from an external secret manager rather than committing key material.
+
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.24.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
