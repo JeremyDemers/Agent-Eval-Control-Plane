@@ -19,11 +19,12 @@ Implemented ahead of the original four-day scope:
 - Reproducible Python distributions with clean-install CI and release attestations
 - CodeQL, dependency review, and frozen-lock vulnerability auditing
 - W3C trace-context propagation through durable PostgreSQL jobs
+- Kubernetes API and CPU/NVIDIA worker deployment with GHCR release images
 
 Next stages:
 
 - Pinned sandbox images with seccomp/AppArmor and microVM isolation
-- Kubernetes sharded jobs
+- Kubernetes autoscaling and production database/operator integration
 - Hosted provider authentication and endpoint-specific adapters
 - NeMo and LangGraph interoperability packages
 - Multi-tenancy, signed immutable object storage, and external trace/metrics backends

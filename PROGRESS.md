@@ -57,6 +57,8 @@
 - CodeQL, dependency review, and weekly frozen-lock vulnerability scanning.
 - Public contribution, disclosure, ownership, issue, and pull-request governance.
 - W3C trace-context propagation across HTTP requests, PostgreSQL jobs, and workers.
+- Kustomize deployment for replicated APIs, CPU workers, and NVIDIA GPU workers.
+- Tagged GHCR image publication with OCI provenance and SBOM attestations.
 
 ## Verification
 
@@ -79,4 +81,4 @@
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
-- Kubernetes, hardened worker isolation, external LLMs, multi-tenancy, LangGraph, and NeMo remain on the roadmap.
+- Kubernetes autoscaling/operator integration, hardened worker isolation, external LLMs, multi-tenancy, LangGraph, and NeMo remain on the roadmap.
