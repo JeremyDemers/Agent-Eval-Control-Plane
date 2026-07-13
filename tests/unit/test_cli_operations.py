@@ -69,6 +69,7 @@ def test_doctor_reports_bounded_database_pool(monkeypatch) -> None:  # type: ign
     assert result.exit_code == 0
     assert "database: pooled min=2 max=8 timeout=2.5s" in result.output
     assert "database migration lock: 15s" in result.output
+    assert "tenant: default" in result.output
 
 
 def test_doctor_reports_sanitized_dcgm_destination(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -526,6 +527,7 @@ def test_auth_cli_hashes_and_validates_configuration(tmp_path: Path) -> None:
     assert validated.exit_code == 0
     assert "valid" in validated.output
     assert "keys=1" in validated.output
+    assert "tenants=1" in validated.output
 
     empty = runner.invoke(app, ["auth", "hash-key", "--secret", ""])
     assert empty.exit_code == 2

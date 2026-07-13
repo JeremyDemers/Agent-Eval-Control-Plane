@@ -25,6 +25,11 @@ time. This permits multiple workers to poll concurrently without duplicate claim
 coordinator. A claim records the worker identity, increments the attempt count, and establishes an
 expiring lease.
 
+Schema v12 evaluates the claim under forced PostgreSQL row-level security. Workers bind
+`AECONTROL_TENANT_ID` at startup, so a worker cannot observe or lease another tenant's queue even when
+both use the same tables and database role. Tenant-specific worker pools may still share physical GPU
+nodes when the cluster scheduler and security policy permit it.
+
 Each successful claim records `started_at`. A retryable failure clears it before returning to the
 queue; completion and terminal failure retain the final attempt timestamp for operational duration
 analysis. Queue waiting time is therefore not mixed into execution history.

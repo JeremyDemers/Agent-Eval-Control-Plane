@@ -41,6 +41,7 @@ from aecontrol.telemetry import (
     shutdown_telemetry,
     telemetry_configuration_from_environment,
 )
+from aecontrol.tenancy import default_tenant_id
 
 app = typer.Typer(help="AgentEval Control Plane CLI")
 datasets_app = typer.Typer(help="Dataset commands")
@@ -97,6 +98,7 @@ def doctor() -> None:
     else:
         console.print("database: direct")
     console.print(f"database migration lock: {database.migration_lock_timeout_seconds:g}s")
+    console.print(f"tenant: {default_tenant_id()}")
     dcgm = dcgm_configuration_from_environment()
     dcgm_detail = (
         f"enabled host={dcgm.endpoint_host} timeout={dcgm.timeout_seconds:g}s pod={dcgm.pod_name}"
@@ -125,7 +127,8 @@ def auth_hash_key(secret: str | None = typer.Option(None, "--secret", hidden=Tru
 def auth_validate(config: Path) -> None:
     """Validate an authentication configuration without exposing key material."""
     auth_config = load_auth_config(config)
-    console.print(f"[green]valid[/green] {config} keys={len(auth_config.keys)}")
+    tenants = len({key.tenant_id for key in auth_config.keys})
+    console.print(f"[green]valid[/green] {config} keys={len(auth_config.keys)} tenants={tenants}")
 
 
 @datasets_app.command("validate")

@@ -56,6 +56,8 @@ def test_kubernetes_workloads_enforce_operational_contracts() -> None:
 
     for name in ("api", "cpu-worker", "gpu-worker"):
         container = by_name[("Deployment", name)]["spec"]["template"]["spec"]["containers"][0]
+        all_env = {item["name"]: item for item in container["env"]}
+        assert all_env["AECONTROL_TENANT_ID"]["value"] == "default"
         env = {
             item["name"]: item["valueFrom"]["secretKeyRef"]
             for item in container["env"]
@@ -105,6 +107,8 @@ def test_keda_overlay_scales_cpu_and_gpu_queues_independently() -> None:
     assert gpu_trigger["targetQueryValue"] == "1"
     for trigger in (cpu_trigger, gpu_trigger):
         assert trigger["connectionFromEnv"] == "DATABASE_URL"
+        assert "set_config('aecontrol.tenant_id', 'default', true)" in trigger["query"]
+        assert "evaluation_jobs.tenant_id = tenant_context.tenant_id" in trigger["query"]
         assert "status = 'queued'" in trigger["query"]
         assert "lease_expires_at < now()" in trigger["query"]
 
@@ -126,6 +130,7 @@ def test_mig_overlay_consumes_profile_resources_and_advertises_them() -> None:
         container = pod_spec["containers"][0]
         env = {item["name"]: item for item in container["env"]}
         assert env["AECONTROL_MIG_PROFILE"]["value"] == profile
+        assert env["AECONTROL_TENANT_ID"]["value"] == "default"
         assert env["AECONTROL_DCGM_EXPORTER_URL"]["value"].endswith(":9400/metrics")
         resource = f"nvidia.com/mig-{profile}"
         assert container["resources"]["requests"][resource] == "1"

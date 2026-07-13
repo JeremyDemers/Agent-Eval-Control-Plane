@@ -11,6 +11,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key
@@ -55,7 +56,7 @@ def test_supported_schema_is_migrated_in_place(database_url: str, stored_version
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 11
+        assert store.health()["schema_version"] == 12
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -150,7 +151,9 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
             assert invalid.json() == {"detail": "API key is invalid"}
 
             observer_headers = {"Authorization": "Bearer read-secret"}
-            assert client.get("/api/v1/runs", headers=observer_headers).status_code == 200
+            observed = client.get("/api/v1/runs", headers=observer_headers)
+            assert observed.status_code == 200
+            assert observed.headers["x-aecontrol-tenant"] == "default"
             forbidden = client.post(
                 "/api/v1/jobs",
                 headers=observer_headers,
@@ -206,10 +209,139 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
             )
 
 
+def test_local_trust_uses_deployment_tenant(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schema = f"test_{uuid4().hex}"
+    monkeypatch.setenv("AECONTROL_TENANT_ID", "deployment-a")
+    try:
+        with TestClient(create_app(database_url, schema=schema)) as client:
+            response = client.get("/api/v1/jobs")
+            assert response.status_code == 200
+            assert response.headers["x-aecontrol-tenant"] == "deployment-a"
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
+def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    schema = f"test_{uuid4().hex}"
+    role = f"tenant_test_{uuid4().hex}"
+    role_password = uuid4().hex
+    auth_config = tmp_path / "tenant-auth.yaml"
+    auth_config.write_text(
+        "keys:\n"
+        f"  - key_id: alpha-admin\n    tenant_id: alpha\n"
+        f"    secret_sha256: {hash_api_key('alpha-secret')}\n    scopes: [admin]\n"
+        f"  - key_id: beta-admin\n    tenant_id: beta\n"
+        f"    secret_sha256: {hash_api_key('beta-secret')}\n    scopes: [admin]\n"
+    )
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        database = connection.info.dbname
+        connection.execute(
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                sql.Identifier(role), sql.Literal(role_password)
+            )
+        )
+        connection.execute(
+            sql.SQL("GRANT CREATE ON DATABASE {} TO {}").format(
+                sql.Identifier(database), sql.Identifier(role)
+            )
+        )
+
+    tenant_database_url = make_conninfo(database_url, user=role, password=role_password)
+    configuration = DatabaseRuntimeConfiguration(
+        pool_min_size=1,
+        pool_max_size=1,
+        pool_timeout_seconds=2,
+        pool_max_waiting=5,
+    )
+    try:
+        with TestClient(
+            create_app(
+                tenant_database_url,
+                schema=schema,
+                auth_config=auth_config,
+                database_config=configuration,
+            )
+        ) as client:
+            alpha = {"Authorization": "Bearer alpha-secret"}
+            beta = {"Authorization": "Bearer beta-secret"}
+            queued = client.post(
+                "/api/v1/jobs",
+                headers=alpha,
+                json={
+                    "suite_path": "examples/suites/coding_repair.yaml",
+                    "agent_version": "baseline",
+                },
+            )
+            assert queued.status_code == 202
+            assert queued.headers["x-aecontrol-tenant"] == "alpha"
+            job_id = queued.json()["job_id"]
+
+            alpha_jobs = client.get("/api/v1/jobs", headers=alpha)
+            beta_jobs = client.get("/api/v1/jobs", headers=beta)
+            assert [item["job_id"] for item in alpha_jobs.json()] == [job_id]
+            assert beta_jobs.json() == []
+            assert client.get(f"/api/v1/jobs/{job_id}", headers=beta).status_code == 404
+
+            for headers, digest in ((alpha, "a" * 64), (beta, "b" * 64)):
+                registered = client.post(
+                    "/api/v1/guardrails/config-versions",
+                    headers=headers,
+                    json={
+                        "config_id": "shared-policy-name",
+                        "version": "1.0.0",
+                        "bundle_sha256": digest,
+                    },
+                )
+                assert registered.status_code == 201
+                visible = client.get("/api/v1/guardrails/config-versions", headers=headers)
+                assert [item["bundle_sha256"] for item in visible.json()] == [digest]
+
+        with psycopg.connect(database_url) as connection:
+            isolated_tables = connection.execute(
+                """SELECT count(*) AS value
+                   FROM pg_class AS class
+                   JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace
+                   WHERE namespace.nspname = %s
+                     AND class.relname = ANY(%s)
+                     AND class.relrowsecurity
+                     AND class.relforcerowsecurity""",
+                (
+                    schema,
+                    [
+                        "evaluation_runs",
+                        "comparisons",
+                        "guardrail_evidence",
+                        "guardrail_config_versions",
+                        "guardrail_config_activations",
+                        "evaluation_jobs",
+                        "workers",
+                    ],
+                ),
+            ).fetchone()
+            assert isolated_tables is not None
+            assert isolated_tables[0] == 7
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+            connection.execute(
+                sql.SQL("REVOKE CREATE ON DATABASE {} FROM {}").format(
+                    sql.Identifier(connection.info.dbname), sql.Identifier(role)
+                )
+            )
+            connection.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
+
+
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 11
+    assert health.json()["schema_version"] == 12
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")

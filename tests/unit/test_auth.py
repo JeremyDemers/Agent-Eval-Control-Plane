@@ -48,3 +48,17 @@ def test_auth_config_rejects_invalid_and_duplicate_keys(tmp_path: Path) -> None:
     )
     with pytest.raises(ValidationError):
         load_auth_config(invalid_scope)
+
+    invalid_tenant = _write_config(
+        tmp_path / "invalid-tenant.yaml",
+        f"  - key_id: bad\n    tenant_id: Other/Tenant\n"
+        f"    secret_sha256: {digest}\n    scopes: [read]\n",
+    )
+    with pytest.raises(ValidationError):
+        load_auth_config(invalid_tenant)
+
+    default_tenant = _write_config(
+        tmp_path / "default-tenant.yaml",
+        f"  - key_id: compatible\n    secret_sha256: {digest}\n    scopes: [read]\n",
+    )
+    assert load_auth_config(default_tenant).keys[0].tenant_id == "default"

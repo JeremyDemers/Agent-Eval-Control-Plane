@@ -27,7 +27,7 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.37.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.38.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
@@ -64,6 +64,11 @@ For a managed database, place the provider URL and TLS parameters in the existin
 Pool limits apply per process, so budget the sum across API, CPU, GPU, and MIG replicas. Pooling is
 opt-in; this keeps the base compatible with PgBouncer and low-connection development clusters. See
 [`database.md`](database.md) for configuration and saturation metrics.
+
+The base binds the API and every worker to tenant `default`. Multi-tenant installations should use
+environment overlays to patch `AECONTROL_TENANT_ID`, worker labels, API-key configuration, and secrets
+for each isolated pool. KEDA scaler queries must establish the matching tenant context before reading
+the RLS-protected queue. See [`multi-tenancy.md`](multi-tenancy.md) for the complete contract.
 
 ## Highly Available PostgreSQL
 

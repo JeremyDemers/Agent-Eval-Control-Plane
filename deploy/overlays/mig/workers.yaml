@@ -39,6 +39,7 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: database-url}
+            - {name: AECONTROL_TENANT_ID, value: default}
             - name: NVIDIA_API_KEY
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: nvidia-api-key}
@@ -96,6 +97,7 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: database-url}
+            - {name: AECONTROL_TENANT_ID, value: default}
             - name: NVIDIA_API_KEY
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: nvidia-api-key}
