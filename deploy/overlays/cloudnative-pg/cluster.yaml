@@ -1,0 +1,39 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: aecontrol-postgres
+spec:
+  description: Highly available AgentEval PostgreSQL cluster
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:17-standard-trixie
+  enableSuperuserAccess: false
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: switchover
+  failoverDelay: 10
+  switchoverDelay: 60
+  bootstrap:
+    initdb:
+      database: aecontrol
+      owner: aecontrol
+      dataChecksums: true
+      encoding: UTF8
+  postgresql:
+    parameters:
+      max_connections: "100"
+      shared_buffers: 256MB
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
+      failoverQuorum: true
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {cpu: "2", memory: 4Gi}
+  storage:
+    size: 20Gi
+  walStorage:
+    size: 5Gi

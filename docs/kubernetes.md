@@ -27,7 +27,7 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.35.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.36.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
@@ -47,9 +47,10 @@ Kustomization or shell history. See [`distributed-tracing.md`](distributed-traci
 variables and attribute limits.
 
 The included PostgreSQL instance is for portfolio and development clusters. Production deployments
-should use a managed PostgreSQL service, external secret management, network policies, TLS ingress,
-autoscaling, and a dedicated storage class. GPU nodes must have NVIDIA drivers and the NVIDIA device
-plugin installed; the manifests do not install cluster-level GPU operators.
+can use the repository's three-instance CloudNativePG overlay or a managed PostgreSQL service, plus
+external secret management, network policies, TLS ingress, autoscaling, and a dedicated storage
+class. GPU nodes must have NVIDIA drivers and the NVIDIA device plugin installed; the manifests do
+not install cluster-level GPU operators.
 
 The GPU and MIG workers consume the GPU Operator's DCGM Exporter service at
 `nvidia-dcgm-exporter.gpu-operator.svc.cluster.local:9400`. Change
@@ -63,6 +64,21 @@ For a managed database, place the provider URL and TLS parameters in the existin
 Pool limits apply per process, so budget the sum across API, CPU, GPU, and MIG replicas. Pooling is
 opt-in; this keeps the base compatible with PgBouncer and low-connection development clusters. See
 [`database.md`](database.md) for configuration and saturation metrics.
+
+## Highly Available PostgreSQL
+
+The CloudNativePG overlay replaces the development StatefulSet with a three-instance PostgreSQL 17
+cluster and rewires the API and workers to the operator-generated application Secret:
+
+```bash
+kubectl apply -f /tmp/aecontrol-secret.yaml
+kubectl apply -k deploy/overlays/cloudnative-pg
+kubectl -n aecontrol wait --for=condition=Ready cluster/aecontrol-postgres --timeout=10m
+```
+
+Install CloudNativePG first and review the node, storage, durability, image-promotion, and backup
+requirements in [`database.md`](database.md). Clusters with Prometheus Operator installed can apply
+`deploy/overlays/cloudnative-pg-monitoring` instead to include an explicit PodMonitor.
 
 ## NVIDIA MIG Workers
 

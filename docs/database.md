@@ -56,6 +56,57 @@ When pooling is active, `/metrics` exports:
 - `aecontrol_database_pool_waiting_requests`
 
 Alert on sustained waiting requests and pool exhaustion, then inspect query latency and transaction
-duration before increasing connection limits. The development PostgreSQL StatefulSet remains a local
-portfolio fixture; production provisioning, backup, failover, and maintenance belong to a managed
-service or PostgreSQL operator.
+duration before increasing connection limits.
+
+## CloudNativePG Production Overlay
+
+The Kubernetes base retains a single-node PostgreSQL StatefulSet for local and portfolio clusters.
+The `cloudnative-pg` overlay removes that StatefulSet and Service, provisions a three-instance
+PostgreSQL 17 cluster, and points every AgentEval deployment at the operator-generated
+`aecontrol-postgres-app` Secret's `uri` key. CloudNativePG owns database credentials, primary routing,
+replication, and rolling switchover; the existing `aecontrol-database` Secret remains the source for
+the NVIDIA API key and artifact-signing keyring.
+
+Install the pinned CloudNativePG operator before applying the overlay:
+
+```bash
+kubectl apply --server-side \
+  -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.29/releases/cnpg-1.29.2.yaml
+kubectl rollout status deployment/cnpg-controller-manager -n cnpg-system --timeout=5m
+
+kubectl apply -f /tmp/aecontrol-secret.yaml
+kubectl apply -k deploy/overlays/cloudnative-pg
+kubectl -n aecontrol wait --for=condition=Ready cluster/aecontrol-postgres --timeout=10m
+kubectl -n aecontrol rollout status deployment/api --timeout=5m
+kubectl -n aecontrol get cluster,pods,pvc
+```
+
+Required pod anti-affinity places the primary and two replicas on different Kubernetes nodes. The
+cluster therefore needs at least three schedulable nodes and a storage class able to provision six
+ReadWriteOnce volumes: one 20 GiB data volume and one 5 GiB WAL volume per instance. Set
+`storage.storageClass` and `walStorage.storageClass` in an environment patch when the default storage
+class is unsuitable. Resize storage declaratively after confirming the storage class supports volume
+expansion; persistent volumes cannot be shrunk in place.
+
+The cluster uses `ANY 1` synchronous replication with required data durability and failover quorum.
+Each acknowledged commit has reached at least one standby. If the primary fails while only one
+standby remains reachable, automatic failover is intentionally blocked because the operator cannot
+prove that the remaining replica contains every acknowledged transaction. This favors consistency
+over write availability during a second failure or network partition. Operators should investigate
+node and network health instead of forcing promotion without reconciling the data-loss risk.
+
+CloudNativePG metrics can be exposed to Prometheus Operator explicitly:
+
+```bash
+kubectl apply -k deploy/overlays/cloudnative-pg-monitoring
+kubectl -n aecontrol get podmonitor aecontrol-postgres
+```
+
+The monitoring overlay requires the `monitoring.coreos.com/v1` PodMonitor CRD. The database image is
+pinned to the PostgreSQL 17 standard track; production promotion should resolve and approve an image
+digest under the organization's patching policy.
+
+High availability is not disaster recovery. This overlay does not yet configure object-storage
+backups, retention, restore testing, or point-in-time recovery. Those controls are required before a
+production launch, along with external secret management, encryption policy, alerting, and a tested
+failure-and-restore runbook.
