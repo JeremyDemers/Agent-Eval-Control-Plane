@@ -56,8 +56,28 @@ def test_doctor_reports_hardened_podman_configuration(monkeypatch) -> None:  # t
     assert "apparmor=aecontrol-sandbox" in result.output
 
 
+def test_doctor_reports_bounded_database_pool(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("AECONTROL_DATABASE_POOL_MIN_SIZE", "2")
+    monkeypatch.setenv("AECONTROL_DATABASE_POOL_MAX_SIZE", "8")
+    monkeypatch.setenv("AECONTROL_DATABASE_POOL_TIMEOUT_SECONDS", "2.5")
+    monkeypatch.setenv("AECONTROL_DATABASE_MIGRATION_LOCK_TIMEOUT_SECONDS", "15")
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "database: pooled min=2 max=8 timeout=2.5s" in result.output
+    assert "database migration lock: 15s" in result.output
+
+
 def test_one_shot_worker_always_shuts_down_telemetry(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     events: list[str] = []
+
+    class Store:
+        def __init__(self, *_args, **_kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def close(self) -> None:
+            events.append("store-close")
 
     class Worker:
         def __init__(self, *_args, **_kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -70,7 +90,7 @@ def test_one_shot_worker_always_shuts_down_telemetry(monkeypatch) -> None:  # ty
         "aecontrol.cli.configure_telemetry_from_environment", lambda: events.append("start")
     )
     monkeypatch.setattr("aecontrol.cli.shutdown_telemetry", lambda: events.append("shutdown"))
-    monkeypatch.setattr("aecontrol.cli.ArtifactStore", lambda _database_url: object())
+    monkeypatch.setattr("aecontrol.cli.ArtifactStore", Store)
     monkeypatch.setattr("aecontrol.cli.EvaluationWorker", Worker)
     monkeypatch.setattr("aecontrol.cli.detect_worker_capabilities", lambda _labels: object())
 
@@ -78,7 +98,7 @@ def test_one_shot_worker_always_shuts_down_telemetry(monkeypatch) -> None:  # ty
 
     assert result.exit_code == 0
     assert "queue empty" in result.output
-    assert events == ["start", "shutdown"]
+    assert events == ["start", "store-close", "shutdown"]
 
 
 def test_hardware_command_supports_human_and_json_output() -> None:

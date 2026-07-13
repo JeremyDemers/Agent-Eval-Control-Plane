@@ -80,6 +80,8 @@
   sanitized diagnostics, and API/worker lifecycle flushing.
 - Digest-enforced Podman image selection, optional seccomp/AppArmor profiles, hardened full-GPU pod
   defaults, safe diagnostics, and a real immutable-image sandbox demo.
+- Bounded health-checked PostgreSQL pooling for APIs/workers, replica-safe advisory schema locks,
+  saturation metrics, direct/PgBouncer mode, and managed-service TLS guidance.
 
 ## Verification
 

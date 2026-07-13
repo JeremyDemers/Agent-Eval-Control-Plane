@@ -27,7 +27,7 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.32.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.33.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
@@ -50,6 +50,11 @@ The included PostgreSQL instance is for portfolio and development clusters. Prod
 should use a managed PostgreSQL service, external secret management, network policies, TLS ingress,
 autoscaling, and a dedicated storage class. GPU nodes must have NVIDIA drivers and the NVIDIA device
 plugin installed; the manifests do not install cluster-level GPU operators.
+
+For a managed database, place the provider URL and TLS parameters in the existing database Secret.
+Pool limits apply per process, so budget the sum across API, CPU, GPU, and MIG replicas. Pooling is
+opt-in; this keeps the base compatible with PgBouncer and low-connection development clusters. See
+[`database.md`](database.md) for configuration and saturation metrics.
 
 ## NVIDIA MIG Workers
 

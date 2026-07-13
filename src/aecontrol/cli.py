@@ -21,6 +21,7 @@ from aecontrol.agents import list_agent_versions
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key, load_auth_config
 from aecontrol.compare import compare_runs
+from aecontrol.database import database_configuration_from_environment
 from aecontrol.datasets import validate_jsonl_dataset
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
@@ -86,6 +87,15 @@ def doctor() -> None:
             f"seccomp={'custom' if sandbox.seccomp_profile else 'runtime-default'}, "
             f"apparmor={sandbox.apparmor_profile or 'runtime-default'}"
         )
+    database = database_configuration_from_environment()
+    if database.pooling_enabled:
+        console.print(
+            f"database: pooled min={database.pool_min_size} max={database.pool_max_size} "
+            f"timeout={database.pool_timeout_seconds:g}s"
+        )
+    else:
+        console.print("database: direct")
+    console.print(f"database migration lock: {database.migration_lock_timeout_seconds:g}s")
     telemetry = telemetry_configuration_from_environment()
     telemetry_detail = (
         f"{telemetry.mode} host={telemetry.endpoint_host}" if telemetry.enabled else telemetry.mode
@@ -445,10 +455,15 @@ def worker(
 ) -> None:
     """Claim and execute durable evaluation jobs."""
     configure_telemetry_from_environment()
+    store: ArtifactStore | None = None
     try:
         resolved_worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}"
+        store = ArtifactStore(
+            database_url,
+            database_config=database_configuration_from_environment(),
+        )
         evaluation_worker = EvaluationWorker(
-            ArtifactStore(database_url),
+            store,
             resolved_worker_id,
             lease_seconds,
             detect_worker_capabilities(_parse_labels(label)),
@@ -460,6 +475,8 @@ def worker(
         console.print(f"worker {resolved_worker_id} polling for jobs")
         asyncio.run(evaluation_worker.run_forever(poll_seconds))
     finally:
+        if store is not None:
+            store.close()
         shutdown_telemetry()
 
 
