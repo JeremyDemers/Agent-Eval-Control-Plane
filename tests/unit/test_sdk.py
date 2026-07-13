@@ -129,6 +129,8 @@ def test_client_collections_operations_and_cancellation() -> None:
         {
             "runs_total": 0,
             "comparisons_total": 0,
+            "guardrail_evidence_total": 0,
+            "guardrail_interventions_total": 0,
             "job_counts": {"cancelled": 1},
             "gate_counts": {},
             "workers_registered": 0,

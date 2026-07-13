@@ -13,6 +13,12 @@ def render_prometheus(snapshot: OperationalSnapshot, workers: Iterable[WorkerRec
         "# HELP aecontrol_comparisons_total Persisted run comparisons.",
         "# TYPE aecontrol_comparisons_total gauge",
         f"aecontrol_comparisons_total {snapshot.comparisons_total}",
+        "# HELP aecontrol_guardrail_evidence_total Persisted NeMo Guardrails checks.",
+        "# TYPE aecontrol_guardrail_evidence_total gauge",
+        f"aecontrol_guardrail_evidence_total {snapshot.guardrail_evidence_total}",
+        "# HELP aecontrol_guardrail_interventions_total Guardrails checks that changed the submitted text.",
+        "# TYPE aecontrol_guardrail_interventions_total gauge",
+        f"aecontrol_guardrail_interventions_total {snapshot.guardrail_interventions_total}",
         "# HELP aecontrol_jobs Evaluation jobs by lifecycle state.",
         "# TYPE aecontrol_jobs gauge",
     ]

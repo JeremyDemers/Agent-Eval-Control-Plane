@@ -62,6 +62,9 @@
 - Queue-aware KEDA autoscaling for CPU and NVIDIA workers with failure fallbacks.
 - NVIDIA NIM runtime with secure hosted credentials, self-hosted management APIs, and worker placement.
 - NeMo Guardrails validation evidence with exact intervention detection and activated-rail diagnostics.
+- Durable NeMo Guardrails evidence with PostgreSQL integrity verification, REST, and sync/async SDKs.
+- Load-aware NVIDIA GPU admission using live free memory and utilization on one device.
+- Browser Guardrails evidence explorer with escaped diagnostics and safety metrics.
 
 ## Verification
 

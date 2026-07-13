@@ -229,7 +229,7 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
         return GuardrailEvidence(
             config_id="content_safety",
             model="meta/llama-3.1-8b-instruct",
-            submitted_text="candidate response",
+            submitted_text="<script>alert(1)</script>",
             response_text="I cannot help with that request.",
             passed_through=False,
             activated_rails=[{"name": "content safety check output"}],
@@ -266,6 +266,27 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
     assert listed.json()[0]["config_id"] == "content_safety"
     assert api_client.get(f"/api/v1/guardrails/evidence/{evidence_id}").status_code == 200
 
+    operations = api_client.get("/api/v1/operations").json()
+    assert operations["guardrail_evidence_total"] == 1
+    assert operations["guardrail_interventions_total"] == 1
+    metrics = api_client.get("/metrics").text
+    assert "aecontrol_guardrail_evidence_total 1" in metrics
+    assert "aecontrol_guardrail_interventions_total 1" in metrics
+
+    dashboard = api_client.get("/")
+    assert dashboard.status_code == 200
+    assert "Safety Evidence" in dashboard.text
+    assert "Intervention rate<b>100.0%" in dashboard.text
+    assert "content_safety" in dashboard.text
+    detail = api_client.get(f"/guardrails/evidence/{evidence_id}")
+    assert detail.status_code == 200
+    assert "Guardrail Check" in detail.text
+    assert "Intervention" in detail.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in detail.text
+    assert "<script>alert(1)</script>" not in detail.text
+    assert "I cannot help with that request." in detail.text
+    assert "content safety check output" in detail.text
+
     integrity = api_client.get("/api/v1/integrity")
     assert integrity.json() == {"checked": 1, "valid": 1, "failures": []}
 
@@ -286,7 +307,10 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
     blocked = api_client.get(f"/api/v1/guardrails/evidence/{evidence_id}")
     assert blocked.status_code == 409
     assert "failed SHA-256 integrity verification" in blocked.json()["detail"]
+    browser_blocked = api_client.get(f"/guardrails/evidence/{evidence_id}")
+    assert browser_blocked.status_code == 409
     assert api_client.get(f"/api/v1/guardrails/evidence/{uuid4()}").status_code == 404
+    assert api_client.get(f"/guardrails/evidence/{uuid4()}").status_code == 404
 
 
 def test_guardrail_upstream_errors_are_actionable(

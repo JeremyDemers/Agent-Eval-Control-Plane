@@ -379,6 +379,8 @@ class JobPlacementDiagnostic(BaseModel):
 class OperationalSnapshot(BaseModel):
     runs_total: int = Field(ge=0)
     comparisons_total: int = Field(ge=0)
+    guardrail_evidence_total: int = Field(ge=0)
+    guardrail_interventions_total: int = Field(ge=0)
     job_counts: dict[str, int]
     gate_counts: dict[str, int]
     workers_registered: int = Field(ge=0)

@@ -446,6 +446,13 @@ class ArtifactStore:
             comparisons_total = connection.execute(
                 "SELECT count(*) AS value FROM comparisons"
             ).fetchone()
+            guardrail_row = connection.execute(
+                """
+                SELECT count(*) AS total,
+                       count(*) FILTER (WHERE NOT passed_through) AS interventions
+                FROM guardrail_evidence
+                """
+            ).fetchone()
             job_rows = connection.execute(
                 "SELECT status, count(*) AS value FROM evaluation_jobs GROUP BY status"
             ).fetchall()
@@ -476,6 +483,7 @@ class ArtifactStore:
         if (
             runs_total is None
             or comparisons_total is None
+            or guardrail_row is None
             or worker_row is None
             or queue_row is None
         ):
@@ -483,6 +491,8 @@ class ArtifactStore:
         return OperationalSnapshot(
             runs_total=int(str(runs_total["value"])),
             comparisons_total=int(str(comparisons_total["value"])),
+            guardrail_evidence_total=int(str(guardrail_row["total"])),
+            guardrail_interventions_total=int(str(guardrail_row["interventions"])),
             job_counts={str(row["status"]): int(str(row["value"])) for row in job_rows},
             gate_counts={str(row["outcome"]): int(str(row["value"])) for row in gate_rows},
             workers_registered=int(str(worker_row["registered"])),

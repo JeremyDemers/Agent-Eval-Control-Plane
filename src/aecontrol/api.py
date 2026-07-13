@@ -430,7 +430,12 @@ def create_app(
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)
     def dashboard() -> str:
         return _render_dashboard(
-            store.list_runs(), store.list_comparisons(), store.list_jobs(), store.list_workers()
+            store.list_runs(),
+            store.list_comparisons(),
+            store.list_jobs(),
+            store.list_workers(),
+            store.list_guardrail_evidence(10),
+            store.operational_snapshot(),
         )
 
     @application.get("/runs/{run_id}", response_class=HTMLResponse, include_in_schema=False)
@@ -448,6 +453,22 @@ def create_app(
         except ArtifactIntegrityError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         return _render_comparison(artifact)
+
+    @application.get(
+        "/guardrails/evidence/{evidence_id}",
+        response_class=HTMLResponse,
+        include_in_schema=False,
+    )
+    def guardrail_evidence_detail(evidence_id: UUID) -> str:
+        try:
+            artifact = store.get_guardrail_evidence(evidence_id)
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404, detail="guardrail evidence was not found"
+            ) from error
+        except ArtifactIntegrityError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return _render_guardrail_evidence(artifact)
 
     return application
 
@@ -503,7 +524,7 @@ h2{{font-size:17px;margin:26px 0 10px}}p{{margin:5px 0}}.muted{{color:var(--mute
 background:var(--paper);border:1px solid var(--line)}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);
 text-align:left;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:var(--muted);background:#f9fafb}}
 tr:last-child td{{border-bottom:0}}a{{color:var(--blue)}}.PASS,.passed{{color:var(--green);font-weight:700}}
-.BLOCK,.failed,.error,.regressed{{color:var(--red);font-weight:700}}.WARN,.queued{{color:var(--amber);font-weight:700}}
+.BLOCK,.failed,.error,.regressed,.intervened{{color:var(--red);font-weight:700}}.WARN,.queued{{color:var(--amber);font-weight:700}}
 .completed{{color:var(--green);font-weight:700}}.running{{color:var(--blue);font-weight:700}}
 details{{background:#fff;border:1px solid var(--line);border-radius:6px;margin:8px 0;padding:10px 12px}}
 summary{{cursor:pointer;font-weight:650}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#111820;color:#e8edf2;
@@ -520,6 +541,8 @@ def _render_dashboard(
     comparisons: list[StoredComparisonSummary],
     jobs: list[EvaluationJob],
     workers: list[WorkerRecord],
+    guardrail_evidence: list[StoredGuardrailEvidenceSummary],
+    snapshot: OperationalSnapshot,
 ) -> str:
     run_rows = (
         "".join(
@@ -560,18 +583,36 @@ def _render_dashboard(
         )
         or "<tr><td colspan='5'>No workers have registered.</td></tr>"
     )
+    guardrail_rows = (
+        "".join(
+            f"<tr><td><a href='/guardrails/evidence/{row.evidence_id}'>{str(row.evidence_id)[:8]}</a></td>"
+            f"<td>{escape(row.config_id)}</td><td>{escape(row.model)}</td>"
+            f"<td class='{'passed' if row.passed_through else 'intervened'}'>"
+            f"{'Pass-through' if row.passed_through else 'Intervention'}</td>"
+            f"<td>{row.created_at:%Y-%m-%d %H:%M:%S} UTC</td></tr>"
+            for row in guardrail_evidence
+        )
+        or "<tr><td colspan='5'>No Guardrails evidence yet.</td></tr>"
+    )
     active_jobs = sum(row.status in {JobStatus.QUEUED, JobStatus.RUNNING} for row in jobs)
+    intervention_rate = (
+        snapshot.guardrail_interventions_total / snapshot.guardrail_evidence_total
+        if snapshot.guardrail_evidence_total
+        else 0
+    )
     return _page(
         "Runs",
         f"""<h1>Evaluation Runs</h1><p class="muted">Durable agent evidence and release decisions.</p>
 <div class="metrics"><div class="metric">Stored runs<b>{len(runs)}</b></div>
 <div class="metric">Active jobs<b>{active_jobs}</b></div>
 <div class="metric">Comparisons<b>{len(comparisons)}</b></div>
-<div class="metric">API contract<b>OpenAPI 3</b></div></div>
+<div class="metric">Safety checks<b>{snapshot.guardrail_evidence_total}</b></div>
+<div class="metric">Intervention rate<b>{intervention_rate:.1%}</b></div></div>
 <h2>Worker Inventory</h2><table><thead><tr><th>Worker</th><th>Host</th><th>Accelerators</th><th>GPU</th><th>Last Seen</th></tr></thead><tbody>{worker_rows}</tbody></table>
 <h2>Evaluation Queue</h2><table><thead><tr><th>Job</th><th>Agent</th><th>Status</th><th>Requires</th><th>Priority</th><th>Attempts</th><th>Worker</th></tr></thead><tbody>{job_rows}</tbody></table>
 <h2>Recent Runs</h2><table><thead><tr><th>Agent</th><th>Suite</th><th>Cases</th><th>Hidden pass</th><th>Completed</th></tr></thead><tbody>{run_rows}</tbody></table>
-<h2>Release Decisions</h2><table><thead><tr><th>ID</th><th>Gate</th><th>Pairs</th><th>Delta</th><th>Created</th></tr></thead><tbody>{comparison_rows}</tbody></table>""",
+<h2>Release Decisions</h2><table><thead><tr><th>ID</th><th>Gate</th><th>Pairs</th><th>Delta</th><th>Created</th></tr></thead><tbody>{comparison_rows}</tbody></table>
+<h2>Safety Evidence</h2><table><thead><tr><th>ID</th><th>Configuration</th><th>Model</th><th>Result</th><th>Created</th></tr></thead><tbody>{guardrail_rows}</tbody></table>""",
     )
 
 
@@ -662,6 +703,33 @@ def _render_comparison(artifact: StoredComparison) -> str:
 <div class="metric">Regressions<b>{len(comparison.regressed_cases)}</b></div></div>
 <h2>Gate Findings</h2><table><thead><tr><th>Scope</th><th>Metric</th><th>Outcome</th><th>Evidence</th></tr></thead><tbody>{findings}</tbody></table>
 <h2>Case Analysis</h2><table><thead><tr><th>Case</th><th>Slice</th><th>Class</th><th>Explanation</th></tr></thead><tbody>{cases}</tbody></table>""",
+    )
+
+
+def _render_guardrail_evidence(artifact: StoredGuardrailEvidence) -> str:
+    evidence = artifact.evidence
+    status_class = "passed" if evidence.passed_through else "intervened"
+    status_label = "Pass-through" if evidence.passed_through else "Intervention"
+    activated_rails = json.dumps(
+        evidence.activated_rails, indent=2, sort_keys=True, ensure_ascii=True, default=str
+    )
+    stats = json.dumps(evidence.stats, indent=2, sort_keys=True, ensure_ascii=True, default=str)
+    rail_count = (
+        len(evidence.activated_rails)
+        if isinstance(evidence.activated_rails, (list, dict))
+        else int(bool(evidence.activated_rails))
+    )
+    return _page(
+        f"Guardrail evidence {str(artifact.evidence_id)[:8]}",
+        f"""<h1>Guardrail Check <span class="{status_class}">{status_label}</span></h1>
+<p class="muted">Evidence {artifact.evidence_id} · {artifact.created_at:%Y-%m-%d %H:%M:%S} UTC</p>
+<div class="metrics"><div class="metric">Configuration<b>{escape(evidence.config_id)}</b></div>
+<div class="metric">Model<b>{escape(evidence.model)}</b></div>
+<div class="metric">Activated rails<b>{rail_count}</b></div></div>
+<h2>Submitted Text</h2><pre>{escape(evidence.submitted_text)}</pre>
+<h2>Guardrailed Response</h2><pre>{escape(evidence.response_text)}</pre>
+<h2>Activated Rails</h2><pre>{escape(activated_rails)}</pre>
+<h2>Server Statistics</h2><pre>{escape(stats)}</pre>""",
     )
 
 
