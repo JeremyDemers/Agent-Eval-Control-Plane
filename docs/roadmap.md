@@ -20,11 +20,12 @@ Implemented ahead of the original four-day scope:
 - CodeQL, dependency review, and frozen-lock vulnerability auditing
 - W3C trace-context propagation through durable PostgreSQL jobs
 - Kubernetes API and CPU/NVIDIA worker deployment with GHCR release images
+- Queue-aware KEDA scaling for CPU and NVIDIA workers
 
 Next stages:
 
 - Pinned sandbox images with seccomp/AppArmor and microVM isolation
-- Kubernetes autoscaling and production database/operator integration
+- Production database/operator integration and predictive GPU capacity planning
 - Hosted provider authentication and endpoint-specific adapters
 - NeMo and LangGraph interoperability packages
 - Multi-tenancy, signed immutable object storage, and external trace/metrics backends

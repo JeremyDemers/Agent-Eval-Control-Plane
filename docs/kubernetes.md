@@ -16,7 +16,7 @@ kubectl -n aecontrol rollout status deployment/api
 kubectl -n aecontrol port-forward service/api 8000:8000
 ```
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.17.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.18.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
@@ -24,3 +24,22 @@ The included PostgreSQL instance is for portfolio and development clusters. Prod
 should use a managed PostgreSQL service, external secret management, network policies, TLS ingress,
 autoscaling, and a dedicated storage class. GPU nodes must have NVIDIA drivers and the NVIDIA device
 plugin installed; the manifests do not install cluster-level GPU operators.
+
+## Queue-Aware Autoscaling
+
+The optional KEDA overlay scales workers from PostgreSQL queue depth. CPU workers target four
+claimable jobs per replica and retain one warm replica. GPU workers target one CUDA job per replica
+and scale from zero to four, allowing expensive GPU nodes to remain unused when no CUDA evaluation is
+queued. Expired leases are included so replacement capacity appears after worker loss.
+
+Install KEDA and Metrics Server before applying this overlay:
+
+```bash
+kubectl apply -f /tmp/aecontrol-secret.yaml
+kubectl apply -k deploy/overlays/keda
+kubectl -n aecontrol get hpa,scaledobjects
+```
+
+The API HPA scales from two to eight replicas at 70% average CPU. KEDA scaler failures retain two CPU
+workers and one GPU worker. Production operators should tune targets, maxima, and stabilization windows
+against evaluation duration, GPU quota, startup latency, and database connection limits.

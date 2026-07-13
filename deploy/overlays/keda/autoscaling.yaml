@@ -1,0 +1,65 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: api}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: api}
+  minReplicas: 2
+  maxReplicas: 8
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: 300}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: {name: cpu-worker}
+spec:
+  scaleTargetRef: {name: cpu-worker, envSourceContainerName: worker}
+  pollingInterval: 10
+  cooldownPeriod: 120
+  minReplicaCount: 1
+  maxReplicaCount: 20
+  fallback: {failureThreshold: 3, replicas: 2}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown: {stabilizationWindowSeconds: 120}
+  triggers:
+    - type: postgresql
+      metadata:
+        connectionFromEnv: DATABASE_URL
+        query: >-
+          SELECT count(*) FROM evaluation_jobs
+          WHERE required_accelerator = 'cpu'
+            AND (status = 'queued' OR (status = 'running' AND lease_expires_at < now()))
+        targetQueryValue: "4"
+        activationTargetQueryValue: "0"
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: {name: gpu-worker}
+spec:
+  scaleTargetRef: {name: gpu-worker, envSourceContainerName: worker}
+  pollingInterval: 10
+  cooldownPeriod: 300
+  minReplicaCount: 0
+  maxReplicaCount: 4
+  idleReplicaCount: 0
+  fallback: {failureThreshold: 3, replicas: 1}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown: {stabilizationWindowSeconds: 300}
+  triggers:
+    - type: postgresql
+      metadata:
+        connectionFromEnv: DATABASE_URL
+        query: >-
+          SELECT count(*) FROM evaluation_jobs
+          WHERE required_accelerator = 'cuda'
+            AND (status = 'queued' OR (status = 'running' AND lease_expires_at < now()))
+        targetQueryValue: "1"
+        activationTargetQueryValue: "0"

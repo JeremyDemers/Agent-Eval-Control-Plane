@@ -183,6 +183,7 @@ kubectl apply -k deploy/kubernetes
 
 Tagged releases publish a GHCR image with an SBOM and build provenance. See
 [`docs/kubernetes.md`](docs/kubernetes.md) for secret setup, rollout checks, and production boundaries.
+An optional KEDA overlay scales CPU and NVIDIA workers from durable PostgreSQL queue depth.
 
 ## Release Artifacts
 
@@ -195,7 +196,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.17.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.18.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 

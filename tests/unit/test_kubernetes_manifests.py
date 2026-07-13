@@ -1,3 +1,4 @@
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -51,12 +52,40 @@ def test_kubernetes_workloads_enforce_operational_contracts() -> None:
 
 def test_kustomization_pins_release_image_and_secret_is_not_committed() -> None:
     kustomization = yaml.safe_load((MANIFEST_ROOT / "kustomization.yaml").read_text())
+    project = tomllib.loads(Path("pyproject.toml").read_text())
     assert kustomization["images"] == [
         {
             "name": "ghcr.io/jeremydemers/agent-eval-control-plane",
-            "newTag": "0.17.0",
+            "newTag": project["project"]["version"],
         }
     ]
     assert "secret.example.yaml" not in kustomization["resources"]
     secret = yaml.safe_load((MANIFEST_ROOT / "secret.example.yaml").read_text())
     assert secret["stringData"]["password"] == "replace-me"
+
+
+def test_keda_overlay_scales_cpu_and_gpu_queues_independently() -> None:
+    path = Path("deploy/overlays/keda/autoscaling.yaml")
+    resources = list(yaml.safe_load_all(path.read_text()))
+    hpa, cpu, gpu = resources
+    assert hpa["kind"] == "HorizontalPodAutoscaler"
+    assert hpa["spec"]["minReplicas"] == 2
+    assert hpa["spec"]["maxReplicas"] == 8
+
+    assert cpu["spec"]["scaleTargetRef"]["name"] == "cpu-worker"
+    assert cpu["spec"]["minReplicaCount"] == 1
+    assert cpu["spec"]["fallback"] == {"failureThreshold": 3, "replicas": 2}
+    cpu_trigger = cpu["spec"]["triggers"][0]["metadata"]
+    assert "required_accelerator = 'cpu'" in cpu_trigger["query"]
+    assert cpu_trigger["targetQueryValue"] == "4"
+
+    assert gpu["spec"]["scaleTargetRef"]["name"] == "gpu-worker"
+    assert gpu["spec"]["minReplicaCount"] == 0
+    assert gpu["spec"]["maxReplicaCount"] == 4
+    gpu_trigger = gpu["spec"]["triggers"][0]["metadata"]
+    assert "required_accelerator = 'cuda'" in gpu_trigger["query"]
+    assert gpu_trigger["targetQueryValue"] == "1"
+    for trigger in (cpu_trigger, gpu_trigger):
+        assert trigger["connectionFromEnv"] == "DATABASE_URL"
+        assert "status = 'queued'" in trigger["query"]
+        assert "lease_expires_at < now()" in trigger["query"]
