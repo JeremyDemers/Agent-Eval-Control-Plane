@@ -35,6 +35,7 @@ Implemented ahead of the original four-day scope:
 - Batched OpenTelemetry OTLP/HTTP trace export across API and durable worker boundaries
 - Digest-enforced Podman sandboxes with configurable seccomp/AppArmor policy and hardened GPU pods
 - Bounded PostgreSQL connection pools, saturation metrics, and advisory-locked schema initialization
+- DCGM Exporter-backed full-GPU and pod-mapped MIG admission telemetry
 
 Next stages:
 

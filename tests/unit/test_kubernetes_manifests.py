@@ -51,10 +51,16 @@ def test_kubernetes_workloads_enforce_operational_contracts() -> None:
     assert gpu["resources"]["requests"]["nvidia.com/gpu"] == "1"
     assert gpu["resources"]["limits"]["nvidia.com/gpu"] == "1"
     assert "pool=kubernetes-gpu" in gpu["command"]
+    gpu_env = {item["name"]: item for item in gpu["env"]}
+    assert gpu_env["AECONTROL_DCGM_EXPORTER_URL"]["value"].endswith(":9400/metrics")
 
     for name in ("api", "cpu-worker", "gpu-worker"):
         container = by_name[("Deployment", name)]["spec"]["template"]["spec"]["containers"][0]
-        env = {item["name"]: item["valueFrom"]["secretKeyRef"] for item in container["env"]}
+        env = {
+            item["name"]: item["valueFrom"]["secretKeyRef"]
+            for item in container["env"]
+            if "valueFrom" in item
+        }
         assert env["AECONTROL_ARTIFACT_SIGNING_KEY_ID"]["key"] == "artifact-signing-key-id"
         assert env["AECONTROL_ARTIFACT_SIGNING_KEYS"]["key"] == "artifact-signing-keys"
 
@@ -120,6 +126,7 @@ def test_mig_overlay_consumes_profile_resources_and_advertises_them() -> None:
         container = pod_spec["containers"][0]
         env = {item["name"]: item for item in container["env"]}
         assert env["AECONTROL_MIG_PROFILE"]["value"] == profile
+        assert env["AECONTROL_DCGM_EXPORTER_URL"]["value"].endswith(":9400/metrics")
         resource = f"nvidia.com/mig-{profile}"
         assert container["resources"]["requests"][resource] == "1"
         assert container["resources"]["limits"][resource] == "1"

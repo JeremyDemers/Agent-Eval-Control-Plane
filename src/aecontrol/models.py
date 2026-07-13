@@ -367,6 +367,7 @@ class GpuDevice(BaseModel):
     temperature_celsius: float | None = None
     power_draw_watts: float | None = Field(default=None, ge=0)
     mig_profile: str | None = Field(default=None, pattern=MIG_PROFILE_PATTERN)
+    telemetry_source: Literal["nvidia-smi", "dcgm-exporter", "unavailable"] = "unavailable"
 
     @field_validator("mig_profile", mode="before")
     @classmethod

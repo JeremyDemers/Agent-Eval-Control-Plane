@@ -34,6 +34,8 @@ spec:
             - runtime=nvidia-nim
           env:
             - {name: AECONTROL_MIG_PROFILE, value: 1g.10gb}
+            - name: AECONTROL_DCGM_EXPORTER_URL
+              value: http://nvidia-dcgm-exporter.gpu-operator.svc.cluster.local:9400/metrics
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: database-url}
@@ -89,6 +91,8 @@ spec:
             - runtime=nvidia-nim
           env:
             - {name: AECONTROL_MIG_PROFILE, value: 3g.40gb}
+            - name: AECONTROL_DCGM_EXPORTER_URL
+              value: http://nvidia-dcgm-exporter.gpu-operator.svc.cluster.local:9400/metrics
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: aecontrol-database, key: database-url}

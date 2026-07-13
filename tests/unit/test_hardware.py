@@ -56,6 +56,25 @@ def test_configured_mig_profile_is_applied_to_visible_devices(monkeypatch) -> No
     assert Accelerator.CUDA in capabilities.accelerators
 
 
+def test_configured_dcgm_exporter_enriches_detected_devices(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    result = Mock(
+        returncode=0,
+        stdout="0, GPU-test, NVIDIA H100, 81920, 1, 2, 3, 4, 9.0\n",
+    )
+    monkeypatch.setenv("AECONTROL_DCGM_EXPORTER_URL", "http://dcgm:9400/metrics")
+    monkeypatch.setattr(shutil, "which", Mock(return_value="/usr/bin/nvidia-smi"))
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=result))
+    monkeypatch.setattr(
+        "aecontrol.dcgm._fetch_metrics",
+        lambda _configuration: 'DCGM_FI_DEV_GPU_UTIL{UUID="GPU-test"} 88\n',
+    )
+
+    capabilities = detect_worker_capabilities()
+
+    assert capabilities.gpus[0].utilization_percent == 88
+    assert capabilities.gpus[0].telemetry_source == "dcgm-exporter"
+
+
 def test_invalid_configured_mig_profile_fails_closed(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv("AECONTROL_MIG_PROFILE", "forty-gigabytes")
     monkeypatch.setattr(shutil, "which", Mock(return_value=None))

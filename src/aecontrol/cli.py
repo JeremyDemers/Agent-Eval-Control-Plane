@@ -23,6 +23,7 @@ from aecontrol.auth import hash_api_key, load_auth_config
 from aecontrol.compare import compare_runs
 from aecontrol.database import database_configuration_from_environment
 from aecontrol.datasets import validate_jsonl_dataset
+from aecontrol.dcgm import dcgm_configuration_from_environment
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
 from aecontrol.guardrails import GuardrailsClient, GuardrailsError, guardrail_bundle_digest
@@ -96,6 +97,13 @@ def doctor() -> None:
     else:
         console.print("database: direct")
     console.print(f"database migration lock: {database.migration_lock_timeout_seconds:g}s")
+    dcgm = dcgm_configuration_from_environment()
+    dcgm_detail = (
+        f"enabled host={dcgm.endpoint_host} timeout={dcgm.timeout_seconds:g}s pod={dcgm.pod_name}"
+        if dcgm.enabled
+        else "disabled"
+    )
+    console.print(f"dcgm exporter: {dcgm_detail}")
     telemetry = telemetry_configuration_from_environment()
     telemetry_detail = (
         f"{telemetry.mode} host={telemetry.endpoint_host}" if telemetry.enabled else telemetry.mode
@@ -466,7 +474,7 @@ def worker(
             store,
             resolved_worker_id,
             lease_seconds,
-            detect_worker_capabilities(_parse_labels(label)),
+            capability_provider=lambda: detect_worker_capabilities(_parse_labels(label)),
         )
         if once:
             job = asyncio.run(evaluation_worker.run_once())
@@ -500,7 +508,8 @@ def hardware(json_output: bool = typer.Option(False, "--json")) -> None:
             else ""
         )
         console.print(
-            f"gpu {gpu.index}: {gpu.name}, compute capability {gpu.compute_capability}{telemetry}"
+            f"gpu {gpu.index}: {gpu.name}, compute capability {gpu.compute_capability}{telemetry}, "
+            f"telemetry {gpu.telemetry_source}"
         )
 
 

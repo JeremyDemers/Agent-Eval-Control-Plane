@@ -6,6 +6,7 @@ import shutil
 import socket
 import subprocess
 
+from aecontrol.dcgm import dcgm_configuration_from_environment, enrich_gpus_from_dcgm
 from aecontrol.models import Accelerator, GpuDevice, WorkerCapabilities, normalize_mig_profile
 
 
@@ -18,6 +19,7 @@ def detect_worker_capabilities(labels: dict[str, str] | None = None) -> WorkerCa
             GpuDevice.model_validate({**gpu.model_dump(), "mig_profile": mig_profile})
             for gpu in gpus
         ]
+    gpus = enrich_gpus_from_dcgm(gpus, dcgm_configuration_from_environment())
     accelerators = [Accelerator.CPU]
     if gpus:
         accelerators.append(Accelerator.CUDA)
@@ -70,6 +72,7 @@ def detect_nvidia_gpus() -> list[GpuDevice]:
                     temperature_celsius=float(fields[6]),
                     power_draw_watts=_optional_float(fields[7]),
                     compute_capability=fields[8],
+                    telemetry_source="nvidia-smi",
                 )
             )
         except ValueError:
