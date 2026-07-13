@@ -9,14 +9,14 @@ Create the database secret before applying the base:
 
 ```bash
 cp deploy/kubernetes/secret.example.yaml /tmp/aecontrol-secret.yaml
-# Replace both occurrences of replace-me, then:
+# Replace every occurrence of replace-me, then:
 kubectl apply -f /tmp/aecontrol-secret.yaml
 kubectl apply -k deploy/kubernetes
 kubectl -n aecontrol rollout status deployment/api
 kubectl -n aecontrol port-forward service/api 8000:8000
 ```
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.18.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.19.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
