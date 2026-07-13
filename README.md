@@ -123,6 +123,12 @@ next scheduling wave without wasting specialized workers, while worker-slot matc
 minimum waves needed for all currently compatible jobs. The dashboard and Prometheus metrics separate
 jobs blocked by missing capacity from compatible jobs deferred only by slot pressure.
 
+Schema v9 records the start of each leased attempt and learns average and p90 execution duration from
+the latest 500 completed CUDA jobs, including exact MIG request classes. When every compatible queued
+job has matching history, the forecast combines p90 duration with the exact clearance-wave count to
+publish a conservative queue ETA and an explicit sample-based confidence level. Missing history stays
+`unavailable` rather than producing synthetic certainty.
+
 Use `make serve PORT=8001` when port `8000` is already occupied.
 
 ![GPU capacity forecast matching NVIDIA A100 and L4 workers to queued NIM jobs](docs/assets/control-plane-dashboard.png)
@@ -225,7 +231,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.26.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.27.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 

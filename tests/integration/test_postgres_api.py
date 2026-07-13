@@ -50,7 +50,7 @@ def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 8
+        assert store.health()["schema_version"] == 9
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -118,7 +118,7 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 8
+    assert health.json()["schema_version"] == 9
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")
@@ -479,6 +479,7 @@ def test_durable_job_runs_to_completion(api_client: TestClient) -> None:
     assert completed is not None
     assert completed.status == JobStatus.COMPLETED
     assert completed.attempts == 1
+    assert completed.started_at is not None
     assert completed.run_id is not None
 
     persisted = api_client.get(f"/api/v1/jobs/{completed.job_id}")
@@ -521,12 +522,14 @@ def test_concurrent_workers_claim_job_once_and_failures_retry(api_client: TestCl
     assert first_attempt is not None
     assert first_attempt.job_id == retrying.job_id
     assert first_attempt.status == JobStatus.QUEUED
+    assert first_attempt.started_at is None
     assert first_attempt.error is not None
 
     second_attempt = asyncio.run(EvaluationWorker(store, "retry-worker").run_once())
     assert second_attempt is not None
     assert second_attempt.status == JobStatus.FAILED
     assert second_attempt.attempts == 2
+    assert second_attempt.started_at is not None
 
 
 def test_capability_aware_job_placement(api_client: TestClient) -> None:
@@ -639,6 +642,7 @@ def test_gpu_resource_constraints_are_atomically_admitted(api_client: TestClient
     assert claimed is not None
     assert claimed.job_id == constrained.job_id
     assert claimed.attempts == 1
+    assert claimed.started_at is not None
     store.cancel_job(constrained.job_id)
 
     invalid = api_client.post(
@@ -887,6 +891,27 @@ def test_gpu_capacity_forecast_spans_api_dashboard_and_metrics(api_client: TestC
             ),
         )
 
+    historical_jobs = [
+        store.enqueue_job(
+            "examples/suites/coding_repair.yaml",
+            f"nim/history-{duration}",
+            required_accelerator=Accelerator.CUDA,
+        )
+        for duration in range(10, 101, 10)
+    ]
+    with psycopg.connect(store.database_url) as connection:
+        for job, duration in zip(historical_jobs, range(10, 101, 10), strict=True):
+            connection.execute(
+                sql.SQL(
+                    """UPDATE {}.evaluation_jobs
+                       SET status = 'completed',
+                           started_at = now() - (%s * interval '1 second'),
+                           updated_at = now()
+                       WHERE job_id = %s"""
+                ).format(sql.Identifier(store.schema)),
+                (duration, job.job_id),
+            )
+
     for priority, memory_mb in ((10, 16000), (5, 40000), (0, 16000), (-1, 100000)):
         response = api_client.post(
             "/api/v1/jobs",
@@ -911,6 +936,16 @@ def test_gpu_capacity_forecast_spans_api_dashboard_and_metrics(api_client: TestC
     assert forecast["deferred_jobs"] == 1
     assert forecast["blocked_jobs"] == 1
     assert forecast["minimum_clearance_waves"] == 2
+    assert forecast["estimated_clearance_seconds"] == pytest.approx(182)
+    assert forecast["estimate_confidence"] == "high"
+    assert forecast["duration_estimates"] == [
+        {
+            "mig_profile": None,
+            "sample_count": 10,
+            "average_seconds": pytest.approx(55),
+            "p90_seconds": pytest.approx(91),
+        }
+    ]
     assert [job["priority"] for job in forecast["jobs"]] == [10, 5, 0, -1]
 
     dashboard = api_client.get("/")
@@ -918,6 +953,7 @@ def test_gpu_capacity_forecast_spans_api_dashboard_and_metrics(api_client: TestC
     assert "GPU Capacity Forecast" in dashboard.text
     assert "GPU first wave<b>2/4" in dashboard.text
     assert "GPU clearance<b>2 waves" in dashboard.text
+    assert "GPU queue ETA<b>182s (high)" in dashboard.text
     assert "capacity-10" in dashboard.text
 
     metrics = api_client.get("/metrics")
@@ -926,3 +962,33 @@ def test_gpu_capacity_forecast_spans_api_dashboard_and_metrics(api_client: TestC
     assert 'aecontrol_gpu_queue_jobs{state="deferred"} 1' in metrics.text
     assert 'aecontrol_gpu_queue_jobs{state="blocked"} 1' in metrics.text
     assert "aecontrol_gpu_queue_clearance_waves 2" in metrics.text
+    assert "aecontrol_gpu_queue_estimated_clearance_seconds 182.000000" in metrics.text
+    assert 'aecontrol_gpu_queue_estimate_confidence{level="high"} 1' in metrics.text
+    assert 'aecontrol_gpu_job_duration_samples{mig_profile="all"} 10' in metrics.text
+
+    profile_history = store.enqueue_job(
+        "examples/suites/coding_repair.yaml",
+        "nim/profile-history",
+        required_accelerator=Accelerator.CUDA,
+        required_mig_profile="3g.40gb",
+    )
+    with psycopg.connect(store.database_url) as connection:
+        connection.execute(
+            sql.SQL(
+                """UPDATE {}.evaluation_jobs
+                   SET status = 'completed', started_at = now() - interval '120 seconds',
+                       updated_at = now()
+                   WHERE job_id = %s"""
+            ).format(sql.Identifier(store.schema)),
+            (profile_history.job_id,),
+        )
+    refreshed = api_client.get("/api/v1/capacity/gpu").json()
+    profile_estimate = next(
+        item for item in refreshed["duration_estimates"] if item["mig_profile"] == "3g.40gb"
+    )
+    assert profile_estimate == {
+        "mig_profile": "3g.40gb",
+        "sample_count": 1,
+        "average_seconds": pytest.approx(120),
+        "p90_seconds": pytest.approx(120),
+    }

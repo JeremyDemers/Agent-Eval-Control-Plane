@@ -5,7 +5,8 @@ AgentEval exposes local operational surfaces backed by PostgreSQL.
 - `/healthz` verifies database connectivity and schema compatibility.
 - `/readyz` returns `503` when work is queued but no worker has heartbeated in the last two minutes.
 - `/metrics` emits Prometheus text with bounded labels for job states and gate outcomes.
-- `/api/v1/capacity/gpu` forecasts the current CUDA queue against active worker capacity.
+- `/api/v1/capacity/gpu` forecasts the current CUDA queue against active worker capacity and reports
+  sample-qualified historical p90 clearance estimates when every compatible request class has data.
 
 The metrics include persisted run and comparison totals, jobs by lifecycle state, gate outcomes,
 registered and active workers, expired leases, oldest queued-job age, and average completed-job
@@ -17,6 +18,9 @@ worker, device index, UUID, and model labels from the registered inventory, plus
 staleness detection.
 GPU queue metrics separate first-wave, deferred, and blocked jobs and expose the exact static
 clearance-wave count without job IDs, model names, or worker assignments as labels.
+Historical duration gauges use only the bounded MIG profile request class plus fixed average/p90
+dimensions. The clearance ETA series is omitted when history is incomplete instead of exporting a
+sentinel or `NaN`.
 
 Every HTTP response includes `X-Request-ID` and `Server-Timing`. A caller-supplied request ID is
 preserved when it contains at most 64 alphanumeric, dot, underscore, or hyphen characters; otherwise

@@ -30,6 +30,7 @@ from aecontrol.models import (
     EvaluationJob,
     EvaluationRun,
     GpuCapacityForecast,
+    GpuDurationEstimate,
     JobPlacementDiagnostic,
     JobStatus,
     OperationalSnapshot,
@@ -43,7 +44,7 @@ from aecontrol.models import (
 )
 from aecontrol.placement import diagnose_placement
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class ArtifactStore:
@@ -227,6 +228,16 @@ class ArtifactStore:
                 "ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS required_mig_profile TEXT"
             )
             connection.execute(
+                "ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ"
+            )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_jobs_gpu_duration
+                   ON evaluation_jobs(updated_at DESC)
+                   WHERE status = 'completed'
+                     AND required_accelerator = 'cuda'
+                     AND started_at IS NOT NULL"""
+            )
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS workers (
                     worker_id TEXT PRIMARY KEY,
@@ -246,7 +257,7 @@ class ArtifactStore:
                 connection.execute(
                     "INSERT INTO schema_metadata(version) VALUES (%s)", (SCHEMA_VERSION,)
                 )
-            elif int(row["version"]) in {1, 2, 3, 4, 5, 6, 7}:
+            elif int(row["version"]) in {1, 2, 3, 4, 5, 6, 7, 8}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif int(row["version"]) != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {row['version']}"
@@ -738,7 +749,49 @@ class ArtifactStore:
                    ORDER BY priority DESC, created_at, job_id"""
             ).fetchall()
         jobs = [EvaluationJob.model_validate(row) for row in rows]
-        return forecast_gpu_capacity(jobs, workers if workers is not None else self.list_workers())
+        return forecast_gpu_capacity(
+            jobs,
+            workers if workers is not None else self.list_workers(),
+            duration_estimates=self._gpu_duration_estimates(),
+        )
+
+    def _gpu_duration_estimates(self) -> list[GpuDurationEstimate]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                WITH recent_durations AS (
+                    SELECT required_mig_profile,
+                           extract(epoch FROM updated_at - started_at) AS duration_seconds
+                    FROM evaluation_jobs
+                    WHERE status = 'completed'
+                      AND required_accelerator = 'cuda'
+                      AND started_at IS NOT NULL
+                      AND updated_at > started_at
+                    ORDER BY updated_at DESC
+                    LIMIT 500
+                )
+                SELECT NULL::text AS mig_profile,
+                       count(*) AS sample_count,
+                       avg(duration_seconds) AS average_seconds,
+                       percentile_cont(0.9) WITHIN GROUP (
+                           ORDER BY duration_seconds
+                       ) AS p90_seconds
+                FROM recent_durations
+                HAVING count(*) > 0
+                UNION ALL
+                SELECT required_mig_profile AS mig_profile,
+                       count(*) AS sample_count,
+                       avg(duration_seconds) AS average_seconds,
+                       percentile_cont(0.9) WITHIN GROUP (
+                           ORDER BY duration_seconds
+                       ) AS p90_seconds
+                FROM recent_durations
+                WHERE required_mig_profile IS NOT NULL
+                GROUP BY required_mig_profile
+                ORDER BY mig_profile NULLS FIRST
+                """
+            ).fetchall()
+        return [GpuDurationEstimate.model_validate(row) for row in rows]
 
     def lease_job(
         self,
@@ -831,6 +884,7 @@ class ArtifactStore:
                 UPDATE evaluation_jobs AS jobs
                 SET status = 'running',
                     attempts = jobs.attempts + 1,
+                    started_at = now(),
                     lease_owner = %s,
                     lease_expires_at = now() + (%s * interval '1 second'),
                     updated_at = now(),
@@ -904,7 +958,9 @@ class ArtifactStore:
                 """
                 UPDATE evaluation_jobs
                 SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
-                    updated_at = now(), lease_owner = NULL, lease_expires_at = NULL, error = %s
+                    updated_at = now(), started_at = CASE
+                        WHEN attempts >= max_attempts THEN started_at ELSE NULL END,
+                    lease_owner = NULL, lease_expires_at = NULL, error = %s
                 WHERE job_id = %s AND status = 'running' AND lease_owner = %s
                 RETURNING *
                 """,

@@ -58,6 +58,16 @@ def capacity_payload() -> dict[str, Any]:
         "deferred_jobs": 1,
         "blocked_jobs": 0,
         "minimum_clearance_waves": 2,
+        "estimated_clearance_seconds": 180,
+        "estimate_confidence": "high",
+        "duration_estimates": [
+            {
+                "mig_profile": None,
+                "sample_count": 12,
+                "average_seconds": 75,
+                "p90_seconds": 90,
+            }
+        ],
         "jobs": [],
     }
 

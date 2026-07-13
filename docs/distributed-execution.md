@@ -25,6 +25,10 @@ time. This permits multiple workers to poll concurrently without duplicate claim
 coordinator. A claim records the worker identity, increments the attempt count, and establishes an
 expiring lease.
 
+Each successful claim records `started_at`. A retryable failure clears it before returning to the
+queue; completion and terminal failure retain the final attempt timestamp for operational duration
+analysis. Queue waiting time is therefore not mixed into execution history.
+
 The worker renews its lease while the evaluation runs. If a process disappears, another worker can
 reclaim the row after expiration. A worker may complete or fail a job only while it owns the active
 lease. Cancellation clears the lease and prevents a late worker acknowledgement from changing the

@@ -7,7 +7,13 @@ from typer.testing import CliRunner
 
 from aecontrol.cli import _parse_labels, app
 from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig
-from aecontrol.models import Accelerator, EvaluationJob, GpuCapacityForecast, GpuQueueJobForecast
+from aecontrol.models import (
+    Accelerator,
+    EvaluationJob,
+    GpuCapacityForecast,
+    GpuDurationEstimate,
+    GpuQueueJobForecast,
+)
 from aecontrol.openai_compatible import CompatibleModel
 
 
@@ -120,6 +126,13 @@ def test_gpu_capacity_command_supports_human_and_json_output(monkeypatch) -> Non
         deferred_jobs=0,
         blocked_jobs=0,
         minimum_clearance_waves=1,
+        estimated_clearance_seconds=45,
+        estimate_confidence="low",
+        duration_estimates=[
+            GpuDurationEstimate(
+                mig_profile=None, sample_count=3, average_seconds=30, p90_seconds=45
+            )
+        ],
         jobs=[
             GpuQueueJobForecast(
                 job_id=job.job_id,
@@ -146,6 +159,8 @@ def test_gpu_capacity_command_supports_human_and_json_output(monkeypatch) -> Non
     assert human.exit_code == 0
     assert "first_wave=1" in human.output
     assert "worker=gpu-worker" in human.output
+    assert "historical ETA: 45.0s confidence=low" in human.output
+    assert "history all-cuda: n=3 average=30.0s p90=45.0s" in human.output
     assert payload.exit_code == 0
     assert '"minimum_clearance_waves": 1' in payload.output
 

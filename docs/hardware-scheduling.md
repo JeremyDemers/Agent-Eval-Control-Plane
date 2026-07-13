@@ -109,6 +109,27 @@ framebuffer memory, and average utilization. Prometheus exports low-cardinality 
 clearance-wave, and active-worker gauges. The browser dashboard displays the same forecast and
 first-wave worker assignments.
 
+## Historical Queue ETA
+
+Schema v9 records `started_at` whenever a worker successfully leases a job. For the latest 500
+completed CUDA attempts, PostgreSQL calculates average and p90 execution duration for all CUDA work
+and for each exact requested MIG profile. Queue waiting time is excluded; a successful retry
+contributes only its final completed attempt.
+
+The capacity forecast selects all-CUDA history for jobs without a MIG requirement and exact profile
+history for MIG jobs. If every compatible queued job has an estimate, it multiplies the largest
+applicable p90 by the exact minimum clearance waves. This is deliberately conservative for mixed
+queues. Confidence is `low` below 10 samples in any selected class and `high` at 10 or more. If a
+class has no history, the ETA and confidence remain `unavailable`. Blocked jobs never affect the ETA.
+
+Prometheus exports `aecontrol_gpu_job_duration_seconds` for average and p90 values,
+`aecontrol_gpu_job_duration_samples`, and `aecontrol_gpu_queue_estimated_clearance_seconds`. The REST,
+SDK, CLI, and browser dashboard expose the same evidence. A fixed-level
+`aecontrol_gpu_queue_estimate_confidence` gauge makes confidence alertable. The estimate is
+observational: changing
+telemetry, worker arrivals, retries, heterogeneous task durations, and runtime failures can change
+actual clearance time.
+
 GPU discovery is optional and fail-safe. Missing binaries, timeouts, command failures, and malformed
 device rows result in a CPU-only capability document. No synthetic GPU is reported. Operators can
 inspect discovery with `aecontrol hardware --json`, and the browser dashboard shows registered worker

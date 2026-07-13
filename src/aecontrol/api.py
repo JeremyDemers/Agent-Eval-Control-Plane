@@ -634,6 +634,11 @@ def _render_dashboard(
         )
         or "<tr><td colspan='6'>No CUDA jobs are queued.</td></tr>"
     )
+    clearance_eta = (
+        f"{gpu_capacity.estimated_clearance_seconds:.0f}s ({gpu_capacity.estimate_confidence})"
+        if gpu_capacity.estimated_clearance_seconds is not None
+        else "history needed"
+    )
     return _page(
         "Runs",
         f"""<h1>Evaluation Runs</h1><p class="muted">Durable agent evidence and release decisions.</p>
@@ -643,7 +648,8 @@ def _render_dashboard(
 <div class="metric">Safety checks<b>{snapshot.guardrail_evidence_total}</b></div>
 <div class="metric">Intervention rate<b>{intervention_rate:.1%}</b></div>
 <div class="metric">GPU first wave<b>{gpu_capacity.first_wave_jobs}/{gpu_capacity.queued_cuda_jobs}</b></div>
-<div class="metric">GPU clearance<b>{gpu_capacity.minimum_clearance_waves} waves</b></div></div>
+<div class="metric">GPU clearance<b>{gpu_capacity.minimum_clearance_waves} waves</b></div>
+<div class="metric">GPU queue ETA<b>{clearance_eta}</b></div></div>
 <h2>Worker Inventory</h2><table><thead><tr><th>Worker</th><th>Host</th><th>Accelerators</th><th>GPU</th><th>Last Seen</th></tr></thead><tbody>{worker_rows}</tbody></table>
 <h2>GPU Capacity Forecast</h2><table><thead><tr><th>Job</th><th>Agent</th><th>Priority</th><th>State</th><th>Matching Workers</th><th>First-Wave Worker</th></tr></thead><tbody>{capacity_rows}</tbody></table>
 <h2>Evaluation Queue</h2><table><thead><tr><th>Job</th><th>Agent</th><th>Status</th><th>Requires</th><th>Priority</th><th>Attempts</th><th>Worker</th></tr></thead><tbody>{job_rows}</tbody></table>
