@@ -167,3 +167,61 @@ def test_diagnostic_explains_live_gpu_load_and_requires_one_device() -> None:
         "GPU utilization telemetry is unavailable",
     ]
     assert diagnostic.workers[2].eligible is True
+
+
+def test_diagnostic_requires_exact_mig_profile_on_the_same_device() -> None:
+    job = EvaluationJob(
+        suite_path="suite.yaml",
+        agent_version="nim/model",
+        required_accelerator=Accelerator.CUDA,
+        required_mig_profile="3g.40gb",
+        minimum_gpu_memory_available_mb=32000,
+    )
+    unpartitioned = _worker(
+        "full-gpu",
+        accelerators=[Accelerator.CPU, Accelerator.CUDA],
+        gpus=[
+            GpuDevice(
+                name="H100",
+                memory_total_mb=81920,
+                memory_used_mb=1000,
+                compute_capability="9.0",
+            )
+        ],
+    )
+    wrong_profile = _worker(
+        "small-mig",
+        accelerators=[Accelerator.CPU, Accelerator.CUDA],
+        gpus=[
+            GpuDevice(
+                name="H100 MIG",
+                memory_total_mb=10240,
+                memory_used_mb=0,
+                compute_capability="9.0",
+                mig_profile="1g.10gb",
+            )
+        ],
+    )
+    qualified = _worker(
+        "large-mig",
+        accelerators=[Accelerator.CPU, Accelerator.CUDA],
+        gpus=[
+            GpuDevice(
+                name="H100 MIG",
+                memory_total_mb=40960,
+                memory_used_mb=1000,
+                compute_capability="9.0",
+                mig_profile="3g.40gb",
+            )
+        ],
+    )
+
+    diagnostic = diagnose_placement(job, [unpartitioned, wrong_profile, qualified], now=NOW)
+
+    assert diagnostic.matching_workers == 1
+    assert diagnostic.workers[0].reasons == ["MIG profile telemetry is unavailable"]
+    assert diagnostic.workers[1].reasons == [
+        "GPU free memory requires >= 32000 MiB, maximum is 10240 MiB",
+        "MIG profile requires '3g.40gb', available: 1g.10gb",
+    ]
+    assert diagnostic.workers[2].eligible is True

@@ -6,11 +6,18 @@ import shutil
 import socket
 import subprocess
 
-from aecontrol.models import Accelerator, GpuDevice, WorkerCapabilities
+from aecontrol.models import Accelerator, GpuDevice, WorkerCapabilities, normalize_mig_profile
 
 
 def detect_worker_capabilities(labels: dict[str, str] | None = None) -> WorkerCapabilities:
     gpus = detect_nvidia_gpus()
+    mig_profile = os.getenv("AECONTROL_MIG_PROFILE")
+    if mig_profile is not None:
+        mig_profile = normalize_mig_profile(mig_profile)
+        gpus = [
+            GpuDevice.model_validate({**gpu.model_dump(), "mig_profile": mig_profile})
+            for gpu in gpus
+        ]
     accelerators = [Accelerator.CPU]
     if gpus:
         accelerators.append(Accelerator.CUDA)

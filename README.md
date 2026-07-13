@@ -97,6 +97,20 @@ devices. Missing load telemetry fails closed. Queued jobs expose placement diagn
 stale workers, accelerator and label mismatches, unavailable samples, and per-device GPU constraints
 without consuming an execution attempt.
 
+MIG-aware jobs can additionally require an exact NVIDIA partition profile. Workers advertise the
+profile assigned by their orchestrator, and schema v8 applies it in the same atomic, single-device
+lease predicate as memory and load. The Kubernetes mixed-strategy overlay includes `1g.10gb` and
+`3g.40gb` worker pools for NVIDIA GPU Operator clusters.
+
+```bash
+uv run aecontrol jobs enqueue \
+  --suite examples/suites/coding_repair.yaml \
+  --agent-version nim/meta/llama-test \
+  --accelerator cuda \
+  --mig-profile 3g.40gb
+kubectl apply -k deploy/overlays/mig
+```
+
 ```bash
 uv run aecontrol jobs explain JOB_ID
 uv run aecontrol jobs capacity
@@ -197,6 +211,8 @@ kubectl apply -k deploy/kubernetes
 Tagged releases publish a GHCR image with an SBOM and build provenance. See
 [`docs/kubernetes.md`](docs/kubernetes.md) for secret setup, rollout checks, and production boundaries.
 An optional KEDA overlay scales CPU and NVIDIA workers from durable PostgreSQL queue depth.
+An independent MIG overlay consumes profile-specific resources exposed by NVIDIA GPU Operator's
+mixed strategy and registers profile-aware worker pools.
 
 ## Release Artifacts
 
@@ -209,7 +225,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.25.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.26.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -351,8 +367,10 @@ model limits.
 ## Current Limitations
 
 The browser explorer is intentionally local-trust for this portfolio phase. Temporary workspaces are not
-hardened isolation for untrusted code. Managed Kubernetes operators, additional hosted providers,
-object storage, deeper NeMo/LangGraph adapters, and production observability remain in `docs/roadmap.md`.
+hardened isolation for untrusted code. The project consumes but does not install or reconfigure NVIDIA
+GPU Operator; production MIG telemetry should be collected with DCGM. Managed database integration,
+additional hosted providers, object storage, deeper NeMo/LangGraph adapters, and multi-tenancy remain
+in `docs/roadmap.md`.
 
 ## Project Governance
 

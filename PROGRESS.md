@@ -67,6 +67,8 @@
 - Browser Guardrails evidence explorer with escaped diagnostics and safety metrics.
 - Rotation-aware HMAC-SHA256 signatures for runs, comparisons, and Guardrails evidence.
 - Priority-preserving CUDA queue forecasts with exact static clearance-wave matching.
+- Exact NVIDIA MIG profile admission across PostgreSQL, API, CLI, SDK, diagnostics, capacity
+  forecasting, Prometheus telemetry, and a GPU Operator mixed-strategy Kubernetes overlay.
 
 ## Verification
 

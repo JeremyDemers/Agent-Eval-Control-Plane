@@ -83,6 +83,7 @@ def _gpu_reasons(job: EvaluationJob, gpus: list[GpuDevice]) -> list[str]:
         job.minimum_gpu_memory_mb == 0
         and job.minimum_cuda_compute_capability is None
         and not load_constrained
+        and job.required_mig_profile is None
     ):
         return []
     if not gpus:
@@ -137,6 +138,15 @@ def _gpu_reasons(job: EvaluationJob, gpus: list[GpuDevice]) -> list[str]:
                 "GPU utilization requires <= "
                 f"{job.maximum_gpu_utilization_percent:g}%, minimum is {min(utilization_values):g}%"
             )
+    if job.required_mig_profile is not None:
+        mig_profiles = sorted({gpu.mig_profile for gpu in gpus if gpu.mig_profile is not None})
+        if not mig_profiles:
+            reasons.append("MIG profile telemetry is unavailable")
+        elif job.required_mig_profile not in mig_profiles:
+            reasons.append(
+                f"MIG profile requires {job.required_mig_profile!r}, "
+                f"available: {', '.join(mig_profiles)}"
+            )
     if not reasons:
         reasons.append(
             "no single GPU satisfies all capacity, compute, and load requirements"
@@ -147,6 +157,8 @@ def _gpu_reasons(job: EvaluationJob, gpus: list[GpuDevice]) -> list[str]:
 
 
 def _gpu_matches(job: EvaluationJob, gpu: GpuDevice) -> bool:
+    if job.required_mig_profile is not None and gpu.mig_profile != job.required_mig_profile:
+        return False
     if gpu.memory_total_mb < job.minimum_gpu_memory_mb:
         return False
     if job.minimum_cuda_compute_capability is not None:

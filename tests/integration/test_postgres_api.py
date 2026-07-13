@@ -50,7 +50,7 @@ def test_schema_v1_is_migrated_in_place(database_url: str) -> None:
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 7
+        assert store.health()["schema_version"] == 8
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -118,7 +118,7 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 7
+    assert health.json()["schema_version"] == 8
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")
@@ -751,6 +751,92 @@ def test_live_gpu_load_constraints_are_atomically_admitted(api_client: TestClien
     )
     assert invalid.status_code == 422
     assert "require the cuda accelerator" in invalid.json()["detail"]
+
+
+def test_mig_profile_admission_is_persisted_diagnosed_and_leased(api_client: TestClient) -> None:
+    store: ArtifactStore = api_client.app.state.store
+    constrained = store.enqueue_job(
+        "examples/suites/coding_repair.yaml",
+        "nim/meta/llama-test",
+        required_accelerator=Accelerator.CUDA,
+        required_mig_profile="3g.40gb",
+        minimum_gpu_memory_available_mb=32000,
+    )
+    assert store.get_job(constrained.job_id).required_mig_profile == "3g.40gb"
+
+    base = WorkerCapabilities(
+        hostname="mig-host",
+        operating_system="linux",
+        architecture="x86_64",
+        cpu_count=8,
+        accelerators=[Accelerator.CPU, Accelerator.CUDA],
+        labels={"runtime": "nvidia-nim"},
+    )
+    wrong_profile = base.model_copy(
+        update={
+            "gpus": [
+                GpuDevice(
+                    name="H100 MIG",
+                    memory_total_mb=40960,
+                    memory_used_mb=1000,
+                    compute_capability="9.0",
+                    mig_profile="2g.20gb",
+                )
+            ]
+        }
+    )
+    store.register_worker("wrong-mig", wrong_profile)
+    assert store.lease_job("wrong-mig", capabilities=wrong_profile) is None
+    diagnostic = api_client.get(f"/api/v1/jobs/{constrained.job_id}/placement").json()
+    assert diagnostic["workers"][0]["reasons"] == [
+        "MIG profile requires '3g.40gb', available: 2g.20gb"
+    ]
+
+    matching_profile = base.model_copy(
+        update={
+            "gpus": [
+                GpuDevice(
+                    name="H100 MIG",
+                    memory_total_mb=40960,
+                    memory_used_mb=4096,
+                    compute_capability="9.0",
+                    mig_profile="3g.40gb",
+                )
+            ]
+        }
+    )
+    store.register_worker("matching-mig", matching_profile)
+    forecast = api_client.get("/api/v1/capacity/gpu").json()
+    assert forecast["first_wave_jobs"] == 1
+    assert forecast["jobs"][0]["assigned_worker_id"] == "matching-mig"
+
+    claimed = store.lease_job("matching-mig", capabilities=matching_profile)
+    assert claimed is not None
+    assert claimed.job_id == constrained.job_id
+    assert claimed.required_mig_profile == "3g.40gb"
+
+    normalized = api_client.post(
+        "/api/v1/jobs",
+        json={
+            "suite_path": "examples/suites/coding_repair.yaml",
+            "agent_version": "baseline",
+            "required_accelerator": "cuda",
+            "required_mig_profile": " 1G.10GB ",
+        },
+    )
+    assert normalized.status_code == 202
+    assert normalized.json()["required_mig_profile"] == "1g.10gb"
+
+    invalid = api_client.post(
+        "/api/v1/jobs",
+        json={
+            "suite_path": "examples/suites/coding_repair.yaml",
+            "agent_version": "baseline",
+            "required_accelerator": "cuda",
+            "required_mig_profile": "mig-3g-40gb",
+        },
+    )
+    assert invalid.status_code == 422
 
 
 def test_readiness_detects_queued_work_without_workers(api_client: TestClient) -> None:

@@ -27,6 +27,7 @@ Implemented ahead of the original four-day scope:
 - Browser Guardrails evidence explorer and low-cardinality safety metrics
 - Rotation-aware HMAC-SHA256 authenticity for persisted evaluation evidence
 - Priority-preserving GPU queue forecasts with exact static clearance-wave matching
+- Exact NVIDIA MIG profile admission and a GPU Operator mixed-strategy deployment overlay
 
 Next stages:
 
