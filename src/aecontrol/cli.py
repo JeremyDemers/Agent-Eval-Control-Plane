@@ -37,6 +37,13 @@ from aecontrol.models import Accelerator, EvaluationRun, GateOutcome, JobStatus,
 from aecontrol.nim import NIMClient
 from aecontrol.ollama import OllamaClient, OllamaError
 from aecontrol.openai_compatible import OpenAICompatibleClient, OpenAICompatibleError
+from aecontrol.recovery import (
+    DEFAULT_MAX_CHECKPOINT_AGE_HOURS,
+    DEFAULT_MAX_LEDGER_ENTRIES,
+    RecoveryVerificationError,
+    RecoveryVerifier,
+    load_recovery_checkpoint,
+)
 from aecontrol.reports import render_html
 from aecontrol.sandbox import podman_sandbox_configuration_from_environment
 from aecontrol.store import ArtifactStore
@@ -504,6 +511,70 @@ def store_checkpoint(
         f"sequence={checkpoint.payload.ledger_sequence} head={checkpoint.payload.ledger_head_sha256}"
     )
     console.print(f"published: {publication.destination}")
+
+
+@store_app.command("verify-recovery")
+def store_verify_recovery(
+    checkpoints: list[Path] = typer.Option(
+        ..., "--checkpoint", help="Signed external checkpoint file; repeat for each tenant"
+    ),
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    schema: str = typer.Option("public", "--schema"),
+    max_checkpoint_age_hours: int = typer.Option(
+        DEFAULT_MAX_CHECKPOINT_AGE_HOURS,
+        "--max-checkpoint-age-hours",
+        min=1,
+        max=24 * 30,
+    ),
+    max_ledger_entries: int = typer.Option(
+        DEFAULT_MAX_LEDGER_ENTRIES,
+        "--max-ledger-entries",
+        min=1,
+        max=1_000_000,
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Verify an isolated PostgreSQL recovery without mutating it."""
+    try:
+        envelopes = [load_recovery_checkpoint(path) for path in checkpoints]
+        verifier = RecoveryVerifier(
+            database_url,
+            schema=schema,
+            keyring=ArtifactKeyring.from_environment(),
+            max_checkpoint_age_hours=max_checkpoint_age_hours,
+            max_ledger_entries=max_ledger_entries,
+        )
+        report = verifier.verify(envelopes)
+    except (RecoveryVerificationError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    if json_output:
+        console.print(report.model_dump_json(indent=2))
+    else:
+        outcome = "passed" if report.success else "failed"
+        console.print(
+            f"recovery verification {outcome}: database={report.database} "
+            f"schema={report.schema_name} version={report.observed_schema_version}"
+        )
+        console.print(
+            f"read-only={str(report.transaction_read_only).lower()} "
+            f"checkpoints={report.checkpoints_valid}/{report.checkpoints_checked} "
+            f"ledger_entries={report.entries_checked}"
+        )
+        for result in report.checkpoint_results:
+            console.print(
+                f"- tenant={result.tenant_id} checkpoint={result.checkpoint_id} "
+                f"sequence={result.ledger_sequence} valid={str(result.valid).lower()}"
+            )
+        for failure in report.failures:
+            location = f" tenant={failure.tenant_id}" if failure.tenant_id else ""
+            sequence = (
+                f" sequence={failure.ledger_sequence}"
+                if failure.ledger_sequence is not None
+                else ""
+            )
+            console.print(f"- failure={failure.code}{location}{sequence}")
+    if not report.success:
+        raise typer.Exit(1)
 
 
 @store_app.command("generate-signing-key")

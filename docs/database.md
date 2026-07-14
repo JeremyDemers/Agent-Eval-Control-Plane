@@ -188,9 +188,15 @@ archiving for the candidate. CloudNativePG generates fresh connection credential
 `aecontrol-postgres-restore-app`; the original Kubernetes Secrets are not part of the physical
 database backup and must be recoverable from the external secret manager.
 
-Validate schema version, row counts, integrity signatures, representative run evidence, and the
-chosen stopping point against the isolated read-write service. Keep application deployments pointed
-at the original Secret until an incident commander approves a reviewed Kustomize cutover to the
-restore Secret's `uri` key. Preserve the failed cluster and archive, then configure a new write
-destination before enabling backups on the promoted cluster. Removing `recoveryTarget` from a copy
-of the template performs recovery through the latest available WAL instead of timestamp-based PITR.
+Validate the candidate against an external signed ledger checkpoint with `aecontrol store
+verify-recovery`; the command forces a read-only transaction and checks schema, checkpoint freshness,
+artifact signatures, ledger continuity, source evidence, and the selected stopping point. The
+excluded `recovery-verification-job.example.yaml` runs the same audit in Kubernetes. See
+[`recovery-verification.md`](recovery-verification.md) for checkpoint timing, Secrets, report fields,
+and failure boundaries.
+
+Keep application deployments pointed at the original Secret until an incident commander approves a
+reviewed Kustomize cutover to the restore Secret's `uri` key. Preserve the failed cluster and archive,
+then configure a new write destination before enabling backups on the promoted cluster. Removing
+`recoveryTarget` from a copy of the template performs recovery through the latest available WAL
+instead of timestamp-based PITR.
