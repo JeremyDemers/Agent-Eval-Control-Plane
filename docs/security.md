@@ -115,6 +115,13 @@ uses short-lived workload credentials, and locally verifies each response before
 prevent a compromised authorized workload from requesting signatures. See
 [`aws-kms-signing.md`](aws-kms-signing.md).
 
+Google Cloud KMS signing pins an immutable CryptoKeyVersion and expected protection level, supplies a
+CRC32C for raw Ed25519 input, and verifies the returned signature checksum and resource identity.
+Bounded retries apply only to checksum-integrity failures; the application still performs offline
+Ed25519 verification before commit. The GKE overlay uses a direct Workload Identity principal with
+only `cloudkms.cryptoKeyVersions.useToSign`. See
+[`gcp-kms-signing.md`](gcp-kms-signing.md).
+
 Amazon Bedrock inference uses the Boto3 credential provider chain and a distinct `aws-bedrock` worker
 label. The EKS overlay supplies short-lived web identity to a dedicated worker and scopes invocation
 to an explicit model ARN. Provider errors are replaced with stable messages before entering evidence;
@@ -131,7 +138,7 @@ can still invoke every model permitted by its IAM role and incur the correspondi
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.53.0
+development-only tools so its result describes the shipped runtime environment. The v0.54.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults

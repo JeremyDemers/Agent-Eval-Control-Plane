@@ -54,8 +54,9 @@ Implemented ahead of the original four-day scope:
 - Pinned AWS KMS Ed25519 signing with workload identity and offline public-key verification
 - Per-test Kubernetes Jobs with pinned Kata RuntimeClass microVM isolation and deny-all networking
 - Native Amazon Bedrock Converse runtime with schema-backed tool output and IRSA worker placement
+- Version-pinned Google Cloud KMS and Cloud HSM Ed25519 signing with end-to-end CRC32C verification
 
 Next stages:
 
 - Additional provider-specific adapters beyond OpenAI-compatible, NVIDIA NIM, and Amazon Bedrock
-- Additional cloud KMS products and dedicated HSM signing adapters
+- Additional cloud KMS and dedicated HSM products beyond AWS KMS, Google Cloud KMS, and Vault

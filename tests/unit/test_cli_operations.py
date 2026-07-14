@@ -22,6 +22,7 @@ from aecontrol.fleet import (
     PlatformFleetReport,
     TenantFleetSummary,
 )
+from aecontrol.gcp_kms import GCP_KMS_KEY_VERSION_ENV
 from aecontrol.guardrails import (
     GuardrailConfigActivation,
     GuardrailConfigVersion,
@@ -151,6 +152,31 @@ def test_doctor_reports_sanitized_aws_kms_signer(monkeypatch) -> None:  # type: 
     assert "key_arn_sha256=" in result.output
     assert "123456789012" not in result.output
     assert "12345678-1234" not in result.output
+
+
+def test_doctor_reports_sanitized_gcp_kms_hsm_signer(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _, public_key = generate_ed25519_keypair()
+    key_version = (
+        "projects/sensitive-project/locations/us-central1/keyRings/private-ring/"
+        "cryptoKeys/private-key/cryptoKeyVersions/7"
+    )
+    monkeypatch.setattr("aecontrol.gcp_kms.kms_v1.KeyManagementServiceClient", lambda: object())
+    monkeypatch.setenv(SIGNING_KEY_ID_ENV, "gcp-hsm")
+    monkeypatch.setenv(SIGNING_ALGORITHM_ENV, ED25519)
+    monkeypatch.setenv(
+        ED25519_PUBLIC_KEYS_ENV,
+        json.dumps({"gcp-hsm": base64.b64encode(public_key).decode()}),
+    )
+    monkeypatch.setenv(GCP_KMS_KEY_VERSION_ENV, key_version)
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "artifact signing: gcp-kms location=us-central1 protection=HSM" in result.output
+    assert "key_version_sha256=" in result.output
+    assert "sensitive-project" not in result.output
+    assert "private-ring" not in result.output
+    assert "private-key" not in result.output
 
 
 def test_auth_federation_diagnostics_are_sanitized(monkeypatch) -> None:  # type: ignore[no-untyped-def]

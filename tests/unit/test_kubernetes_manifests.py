@@ -255,6 +255,41 @@ def test_aws_bedrock_overlay_uses_dedicated_irsa_worker_and_scoped_policy() -> N
     assert kustomization["images"][0]["newTag"] == project["project"]["version"]
 
 
+def test_gcp_kms_overlay_uses_workload_identity_and_one_permission_role() -> None:
+    root = Path("deploy/overlays/gcp-kms")
+    service_account = yaml.safe_load((root / "service-account.yaml").read_text())
+    custom_role = yaml.safe_load((root / "custom-role.example.yaml").read_text())
+    patches = list(yaml.safe_load_all((root / "workloads.yaml").read_text()))
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+
+    assert service_account == {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {"name": "aecontrol-gcp-kms-signer"},
+        "automountServiceAccountToken": True,
+    }
+    assert custom_role["includedPermissions"] == ["cloudkms.cryptoKeyVersions.useToSign"]
+    assert {item["metadata"]["name"] for item in patches} == {
+        "api",
+        "cpu-worker",
+        "gpu-worker",
+    }
+    for patch in patches:
+        pod = patch["spec"]["template"]["spec"]
+        assert pod["serviceAccountName"] == "aecontrol-gcp-kms-signer"
+        environment = {item["name"]: item for item in pod["containers"][0]["env"]}
+        assert environment["AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS"]["$patch"] == "delete"
+        assert environment["AECONTROL_ARTIFACT_GCP_KMS_KEY_VERSION"]["value"].endswith(
+            "/cryptoKeyVersions/1"
+        )
+        assert environment["AECONTROL_ARTIFACT_GCP_KMS_PROTECTION_LEVEL"]["value"] == "HSM"
+        assert environment["AECONTROL_ARTIFACT_GCP_KMS_INTEGRITY_ATTEMPTS"]["value"] == "3"
+        assert "GOOGLE_APPLICATION_CREDENTIALS" not in environment
+    assert "custom-role.example.yaml" not in kustomization["resources"]
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+
+
 def test_kata_sandbox_overlay_has_least_privilege_and_fail_closed_workloads() -> None:
     root = Path("deploy/overlays/kata-sandbox")
     project = tomllib.loads(Path("pyproject.toml").read_text())

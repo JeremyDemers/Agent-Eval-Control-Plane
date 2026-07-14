@@ -1,0 +1,5 @@
+title: AgentEval KMS Signer
+description: Sign AgentEval evidence with one IAM-bound Cloud KMS key.
+stage: GA
+includedPermissions:
+  - cloudkms.cryptoKeyVersions.useToSign

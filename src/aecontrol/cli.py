@@ -31,6 +31,7 @@ from aecontrol.dcgm import dcgm_configuration_from_environment
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.federation import oidc_configuration_from_environment
 from aecontrol.gate import evaluate_gate, load_policy
+from aecontrol.gcp_kms import gcp_kms_configuration_from_environment
 from aecontrol.guardrails import GuardrailsClient, GuardrailsError, guardrail_bundle_digest
 from aecontrol.hardware import detect_worker_capabilities
 from aecontrol.integrity import ED25519, HMAC_SHA256, ArtifactKeyring, generate_ed25519_keypair
@@ -187,7 +188,14 @@ def doctor() -> None:
     keyring = ArtifactKeyring.from_environment()
     vault = vault_configuration_from_environment()
     aws_kms = aws_kms_configuration_from_environment()
-    if aws_kms is not None:
+    gcp_kms = gcp_kms_configuration_from_environment()
+    if gcp_kms is not None:
+        console.print(
+            f"artifact signing: gcp-kms location={gcp_kms.location} "
+            f"protection={gcp_kms.protection_level} "
+            f"key_version_sha256={gcp_kms.key_version_sha256[:12]}"
+        )
+    elif aws_kms is not None:
         console.print(
             f"artifact signing: aws-kms region={aws_kms.region} "
             f"key_arn_sha256={aws_kms.key_arn_sha256[:12]}"
