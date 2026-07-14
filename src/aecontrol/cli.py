@@ -21,6 +21,7 @@ from rich.console import Console
 from aecontrol.agents import list_agent_versions
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key, load_auth_config
+from aecontrol.aws_kms import aws_kms_configuration_from_environment
 from aecontrol.checkpoints import FileCheckpointSink, checkpoint_sink_from_environment
 from aecontrol.compare import compare_runs
 from aecontrol.database import database_configuration_from_environment
@@ -170,7 +171,13 @@ def doctor() -> None:
         )
     keyring = ArtifactKeyring.from_environment()
     vault = vault_configuration_from_environment()
-    if vault is not None:
+    aws_kms = aws_kms_configuration_from_environment()
+    if aws_kms is not None:
+        console.print(
+            f"artifact signing: aws-kms region={aws_kms.region} "
+            f"key_arn_sha256={aws_kms.key_arn_sha256[:12]}"
+        )
+    elif vault is not None:
         console.print(
             f"artifact signing: vault-transit host={vault.endpoint_host} "
             f"mount={vault.mount} key_version={vault.key_version}"

@@ -15,6 +15,7 @@ from aecontrol.integrity import (
     SIGNING_KEY_ID_ENV,
     SIGNING_KEYS_ENV,
     ArtifactKeyring,
+    ArtifactSigningError,
     artifact_digest,
     generate_ed25519_keypair,
     ledger_entry_digest,
@@ -123,6 +124,28 @@ def test_ed25519_key_configuration_fails_closed() -> None:
             active_algorithm=ED25519,
             ed25519_public_keys={"attestor": public_key},
         )
+
+
+def test_remote_signer_output_must_verify_before_persistence() -> None:
+    _, public_key = generate_ed25519_keypair()
+
+    class InvalidRemoteSigner:
+        algorithm = ED25519
+        key_id = "remote-attestor"
+
+        @staticmethod
+        def sign(_message: bytes) -> str:
+            return base64.b64encode(b"x" * 64).decode()
+
+    keyring = ArtifactKeyring(
+        active_key_id=InvalidRemoteSigner.key_id,
+        active_algorithm=ED25519,
+        ed25519_public_keys={InvalidRemoteSigner.key_id: public_key},
+        remote_signer=InvalidRemoteSigner(),
+    )
+
+    with pytest.raises(ArtifactSigningError, match="failed local verification"):
+        keyring.sign("run", uuid4(), "a" * 64)
 
 
 def test_keyring_loads_base64_keys_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:

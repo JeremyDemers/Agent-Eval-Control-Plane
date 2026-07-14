@@ -51,9 +51,10 @@ Implemented ahead of the original four-day scope:
 - Scheduled CloudNativePG restore drills with immutable report archival and bounded cleanup
 - Cross-region CloudNativePG distributed topology with guarded, token-bound replica promotion
 - Independently verified multi-region S3 Object Lock checkpoint publication with durability policy
+- Pinned AWS KMS Ed25519 signing with workload identity and offline public-key verification
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
 - Additional hosted provider authentication and endpoint-specific adapters
-- Direct cloud KMS/HSM signing adapters
+- Additional cloud KMS products and dedicated HSM signing adapters

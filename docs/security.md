@@ -102,6 +102,11 @@ retention. The audit compares those anchors with the live chain and reports priv
 truncation. AgentEval does not provision buckets or IAM, and its local filesystem sink remains under
 host-administrator control. See [`evidence-checkpoints.md`](evidence-checkpoints.md).
 
+AWS KMS remote signing keeps the active Ed25519 private key non-exportable, pins an immutable key ARN,
+uses short-lived workload credentials, and locally verifies each response before commit. It does not
+prevent a compromised authorized workload from requesting signatures. See
+[`aws-kms-signing.md`](aws-kms-signing.md).
+
 ## Repository Security
 
 `.github/workflows/security.yml` runs three independent controls:
@@ -111,7 +116,7 @@ host-administrator control. See [`evidence-checkpoints.md`](evidence-checkpoints
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.50.0
+development-only tools so its result describes the shipped runtime environment. The v0.51.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults

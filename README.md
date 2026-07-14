@@ -271,7 +271,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.50.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.51.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -499,6 +499,13 @@ and the Kubernetes overlay removes private-key injection from every workload. Se
 [`docs/vault-transit-signing.md`](docs/vault-transit-signing.md) for least-privilege policy, rotation,
 token delivery, failure semantics, and the FIPS boundary.
 
+AWS KMS can also hold a non-exportable Ed25519 key behind a pinned key ARN and short-lived workload
+identity. The adapter fixes the KMS key spec, signing algorithm, and message type; rejects aliases and
+mismatched responses; and locally verifies every returned signature before commit. An IRSA-ready
+Kubernetes overlay removes private keys from all application pods. See
+[`docs/aws-kms-signing.md`](docs/aws-kms-signing.md) for provisioning, least-privilege IAM, rotation,
+offline verification, and compromise boundaries.
+
 ```bash
 uv run aecontrol store generate-signing-key --algorithm ed25519
 uv run aecontrol store verify
@@ -517,9 +524,8 @@ backend is not hardened isolation for untrusted code, while the stronger Podman 
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Cross-region
 provider-native object replication and fencing outside Kubernetes remain platform-owned controls;
-automatic multi-writer operation is intentionally unsupported. Additional hosted providers and
-direct cloud KMS/HSM adapters remain in
-`docs/roadmap.md`.
+automatic multi-writer operation is intentionally unsupported. Additional hosted providers, other
+cloud KMS products, and dedicated HSM adapters remain in `docs/roadmap.md`.
 
 ## Project Governance
 

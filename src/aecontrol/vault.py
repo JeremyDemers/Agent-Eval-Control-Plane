@@ -12,6 +12,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
+from aecontrol.integrity import ArtifactSigningError
+
 VAULT_ADDR_ENV = "AECONTROL_ARTIFACT_VAULT_ADDR"
 VAULT_TOKEN_ENV = "AECONTROL_ARTIFACT_VAULT_TOKEN"
 VAULT_TOKEN_FILE_ENV = "AECONTROL_ARTIFACT_VAULT_TOKEN_FILE"
@@ -36,7 +38,7 @@ _MAX_TOKEN_BYTES = 16 * 1024
 _MAX_RESPONSE_BYTES = 1024 * 1024
 
 
-class VaultTransitError(RuntimeError):
+class VaultTransitError(ArtifactSigningError):
     """Vault Transit could not produce a trusted signature."""
 
 

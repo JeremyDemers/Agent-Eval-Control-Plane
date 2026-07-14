@@ -185,6 +185,37 @@ def test_vault_transit_overlay_removes_private_keys_and_mounts_token_read_only()
     assert kustomization["images"][0]["newTag"] == project["project"]["version"]
 
 
+def test_aws_kms_overlay_uses_workload_identity_without_private_keys() -> None:
+    root = Path("deploy/overlays/aws-kms")
+    service_account = yaml.safe_load((root / "service-account.yaml").read_text())
+    assert service_account["metadata"]["name"] == "aecontrol-kms-signer"
+    assert service_account["metadata"]["annotations"]["eks.amazonaws.com/role-arn"].startswith(
+        "arn:aws:iam::"
+    )
+    assert service_account["automountServiceAccountToken"] is True
+
+    patches = list(yaml.safe_load_all((root / "workloads.yaml").read_text()))
+    assert {item["metadata"]["name"] for item in patches} == {
+        "api",
+        "cpu-worker",
+        "gpu-worker",
+    }
+    for patch in patches:
+        pod = patch["spec"]["template"]["spec"]
+        assert pod["serviceAccountName"] == "aecontrol-kms-signer"
+        environment = {item["name"]: item for item in pod["containers"][0]["env"]}
+        assert environment["AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS"]["$patch"] == "delete"
+        assert environment["AECONTROL_ARTIFACT_AWS_KMS_KEY_ARN"]["value"].startswith(
+            "arn:aws:kms:"
+        )
+        assert environment["AECONTROL_ARTIFACT_AWS_KMS_TIMEOUT_SECONDS"]["value"] == "5"
+
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    assert kustomization["resources"] == ["../../kubernetes", "service-account.yaml"]
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+
+
 def test_cloudnative_pg_overlay_replaces_development_database_with_quorum_cluster() -> None:
     root = Path("deploy/overlays/cloudnative-pg")
     cluster = yaml.safe_load((root / "cluster.yaml").read_text())
