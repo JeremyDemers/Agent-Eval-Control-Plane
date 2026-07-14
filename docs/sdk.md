@@ -20,6 +20,7 @@ job = client.enqueue_job(
 placement = client.explain_job(job.job_id)
 capacity = client.gpu_capacity()
 demand = client.gpu_demand()
+fleet = client.platform_fleet(active_worker_window_seconds=120)
 integrity = client.verify_artifacts()
 completed = client.wait_for_job(job.job_id)
 run = client.get_run(completed.run_id) if completed.run_id else None
@@ -57,6 +58,11 @@ Quota automation uses `tenant_quota` and `set_tenant_quota` with an `operator` c
 call `current_tenant_quota` to retrieve their typed policy and live queue, rolling submission, active
 lease, and CUDA lease usage. The asynchronous client exposes matching coroutines. See
 [`tenant-quotas.md`](tenant-quotas.md).
+
+Platform operators call `platform_fleet` for a typed per-tenant and total CPU/CUDA scheduling report.
+The async client exposes the matching coroutine. The response contains resource counts, lifecycle and
+quota state, but no job, worker, model, label, GPU identity, or evidence fields. See
+[`fleet-analytics.md`](fleet-analytics.md).
 
 Evidence automation uses `publish_ledger_checkpoint(retention_days=90)` to sign and publish the
 current tenant head, and `ledger_checkpoints()` to retrieve public-verifiable envelopes. The async

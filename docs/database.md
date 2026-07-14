@@ -51,6 +51,11 @@ Schema v17 also uses tenant-specific transaction advisory locks for queue and ex
 admission. Those locks are independent of the schema migration lock and serialize only submissions
 and worker claims for the same tenant. See [`tenant-quotas.md`](tenant-quotas.md).
 
+Schema v18 creates platform-owned fleet job and worker rollups outside tenant RLS. Source-table
+triggers synchronize minimal scheduling fields in the same transaction, while startup rebuilds the
+rollups under the migration lock. The operator report aggregates only these tables; see
+[`fleet-analytics.md`](fleet-analytics.md) for the excluded fields and database-owner trust boundary.
+
 ## Monitoring
 
 When pooling is active, `/metrics` exports:

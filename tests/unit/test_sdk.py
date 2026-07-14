@@ -16,6 +16,12 @@ from aecontrol.checkpoints import (
     LedgerCheckpointPayload,
     SignedLedgerCheckpoint,
 )
+from aecontrol.fleet import (
+    FleetQuotaSaturation,
+    FleetResourceSnapshot,
+    PlatformFleetReport,
+    TenantFleetSummary,
+)
 from aecontrol.guardrails import (
     ExpectedGuardrailAction,
     GuardrailConfigActivation,
@@ -476,6 +482,51 @@ def test_client_manages_tenant_quotas() -> None:
     assert client.set_tenant_quota("research", limits) == quota
     assert client.current_tenant_quota() == status
     assert transport.requests[1][2] == limits.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_clients_read_platform_fleet_report() -> None:
+    now = datetime.now(UTC)
+    resources = FleetResourceSnapshot(
+        queued_cpu_jobs=1,
+        queued_cuda_jobs=2,
+        active_running_cpu_jobs=3,
+        active_running_cuda_jobs=4,
+        jobs_submitted_last_hour=5,
+        workers_observed=6,
+        active_cpu_workers=7,
+        active_cuda_workers=8,
+        active_gpu_devices=9,
+        oldest_queued_seconds=10,
+    )
+    report = PlatformFleetReport(
+        observed_at=now,
+        active_worker_window_seconds=300,
+        totals=resources,
+        tenants=[
+            TenantFleetSummary(
+                tenant_id="research",
+                display_name="Research",
+                status="active",
+                quota=TenantQuotaLimits(max_running_cuda_jobs=4),
+                saturation=FleetQuotaSaturation(
+                    queued_jobs=False,
+                    jobs_per_hour=False,
+                    running_jobs=False,
+                    running_cuda_jobs=True,
+                ),
+                **resources.model_dump(),
+            )
+        ],
+    )
+    path = "/api/v1/platform/fleet?active_worker_window_seconds=300"
+    transport = FakeTransport()
+    payload = report.model_dump(mode="json")
+    transport.add("GET", path, payload, payload)
+
+    assert AgentEvalClient(transport=transport).platform_fleet(300) == report
+    assert await AsyncAgentEvalClient(transport=transport).platform_fleet(300) == report
+    assert transport.requests == [("GET", path, None), ("GET", path, None)]
 
 
 @pytest.mark.asyncio

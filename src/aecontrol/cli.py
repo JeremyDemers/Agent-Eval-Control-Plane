@@ -61,6 +61,7 @@ nim_app = typer.Typer(help="NVIDIA NIM provider commands")
 guardrails_app = typer.Typer(help="NVIDIA NeMo Guardrails commands")
 auth_app = typer.Typer(help="API authentication commands")
 tenant_app = typer.Typer(help="Tenant resource-governance commands")
+platform_app = typer.Typer(help="Platform operator commands")
 app.add_typer(datasets_app, name="datasets")
 app.add_typer(suites_app, name="suites")
 app.add_typer(plugins_app, name="plugins")
@@ -73,6 +74,7 @@ app.add_typer(nim_app, name="nim")
 app.add_typer(guardrails_app, name="guardrails")
 app.add_typer(auth_app, name="auth")
 app.add_typer(tenant_app, name="tenant")
+app.add_typer(platform_app, name="platform")
 console = Console()
 
 
@@ -220,6 +222,47 @@ def tenant_quota_status(
         f"running={usage.active_running_jobs}/{quota.max_running_jobs} "
         f"cuda={usage.active_running_cuda_jobs}/{quota.max_running_cuda_jobs}"
     )
+
+
+@platform_app.command("fleet")
+def platform_fleet(
+    active_worker_window_seconds: int = typer.Option(120, min=30, max=3600),
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Show privacy-bounded queue and worker capacity across tenants."""
+    report = ArtifactStore(database_url).platform_fleet_report(active_worker_window_seconds)
+    if json_output:
+        console.print(report.model_dump_json(indent=2))
+        return
+    totals = report.totals
+    console.print(
+        f"fleet: tenants={len(report.tenants)} "
+        f"queued_cpu={totals.queued_cpu_jobs} queued_cuda={totals.queued_cuda_jobs}"
+    )
+    console.print(
+        f"running_cpu={totals.active_running_cpu_jobs} "
+        f"running_cuda={totals.active_running_cuda_jobs} "
+        f"active_gpus={totals.active_gpu_devices}"
+    )
+    for tenant in report.tenants:
+        saturated = ",".join(
+            name
+            for name, value in (
+                ("queue", tenant.saturation.queued_jobs),
+                ("hourly", tenant.saturation.jobs_per_hour),
+                ("running", tenant.saturation.running_jobs),
+                ("cuda", tenant.saturation.running_cuda_jobs),
+            )
+            if value
+        )
+        console.print(
+            f"{tenant.tenant_id} status={tenant.status} "
+            f"queue={tenant.queued_cpu_jobs + tenant.queued_cuda_jobs} "
+            f"running={tenant.active_running_cpu_jobs + tenant.active_running_cuda_jobs} "
+            f"cuda_workers={tenant.active_cuda_workers} gpus={tenant.active_gpu_devices} "
+            f"saturated={saturated or 'none'}"
+        )
 
 
 @datasets_app.command("validate")

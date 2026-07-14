@@ -27,6 +27,12 @@ from aecontrol.checkpoints import (
 )
 from aecontrol.database import DatabasePoolSnapshot, DatabaseRuntimeConfiguration
 from aecontrol.demand import DEFAULT_LOOKBACK_DAYS, forecast_gpu_demand
+from aecontrol.fleet import (
+    FleetQuotaSaturation,
+    FleetResourceSnapshot,
+    PlatformFleetReport,
+    TenantFleetSummary,
+)
 from aecontrol.guardrails import (
     GuardrailConfigActivation,
     GuardrailConfigVersion,
@@ -87,7 +93,7 @@ from aecontrol.tenants import (
     TenantSuspendedError,
 )
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 SIGNED_ARTIFACT_TABLES = ("evaluation_runs", "comparisons", "guardrail_evidence")
 TENANT_TABLES = (
     "evaluation_runs",
@@ -560,15 +566,52 @@ class ArtifactStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fleet_job_rollups (
+                    tenant_id TEXT NOT NULL CHECK (
+                        tenant_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+                    ),
+                    job_id UUID NOT NULL,
+                    status TEXT NOT NULL CHECK (
+                        status IN ('queued', 'running', 'completed', 'failed', 'cancelled')
+                    ),
+                    required_accelerator TEXT NOT NULL CHECK (
+                        required_accelerator IN ('cpu', 'cuda')
+                    ),
+                    created_at TIMESTAMPTZ NOT NULL,
+                    lease_expires_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (tenant_id, job_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fleet_worker_rollups (
+                    tenant_id TEXT NOT NULL CHECK (
+                        tenant_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+                    ),
+                    worker_id TEXT NOT NULL,
+                    supports_cpu BOOLEAN NOT NULL,
+                    supports_cuda BOOLEAN NOT NULL,
+                    gpu_devices INTEGER NOT NULL CHECK (gpu_devices >= 0),
+                    last_seen_at TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (tenant_id, worker_id)
+                )
+                """
+            )
             self._suspend_tenant_isolation(connection)
             self._backfill_artifact_digests(connection)
             self._migrate_signature_envelopes(connection)
             self._enable_tenant_isolation(connection)
             self._suspend_tenant_isolation(connection)
             self._backfill_artifact_ledger(connection)
+            self._backfill_fleet_rollups(connection)
             self._enable_tenant_isolation(connection)
             self._install_ledger_immutability_trigger(connection)
             self._install_checkpoint_immutability_trigger(connection)
+            self._install_fleet_rollup_triggers(connection)
             connection.execute(
                 "ALTER TABLE evaluation_runs ALTER COLUMN payload_sha256 SET NOT NULL"
             )
@@ -580,7 +623,7 @@ class ArtifactStore:
                 )
                 return
             stored_version = cast(int, row["version"])
-            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}:
+            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif stored_version != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {stored_version}"
@@ -842,6 +885,157 @@ class ArtifactStore:
                 raise KeyError(tenant_id)
             usage = self._tenant_quota_usage(connection)
         return TenantQuotaStatus(quota=quota, usage=usage)
+
+    def platform_fleet_report(
+        self, active_worker_window_seconds: int = DEFAULT_WORKER_ACTIVE_SECONDS
+    ) -> PlatformFleetReport:
+        if not 30 <= active_worker_window_seconds <= 3600:
+            raise ValueError("active worker window must be between 30 and 3600 seconds")
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                WITH tenant_ids AS (
+                    SELECT tenant_id FROM control_plane_tenants
+                    UNION
+                    SELECT tenant_id FROM fleet_job_rollups
+                    UNION
+                    SELECT tenant_id FROM fleet_worker_rollups
+                ), job_usage AS (
+                    SELECT tenant_id,
+                           count(*) FILTER (
+                               WHERE status = 'queued' AND required_accelerator = 'cpu'
+                           ) AS queued_cpu_jobs,
+                           count(*) FILTER (
+                               WHERE status = 'queued' AND required_accelerator = 'cuda'
+                           ) AS queued_cuda_jobs,
+                           count(*) FILTER (
+                               WHERE status = 'running' AND lease_expires_at >= now()
+                                 AND required_accelerator = 'cpu'
+                           ) AS active_running_cpu_jobs,
+                           count(*) FILTER (
+                               WHERE status = 'running' AND lease_expires_at >= now()
+                                 AND required_accelerator = 'cuda'
+                           ) AS active_running_cuda_jobs,
+                           count(*) FILTER (
+                               WHERE created_at >= now() - interval '1 hour'
+                           ) AS jobs_submitted_last_hour,
+                           greatest(coalesce(max(extract(epoch FROM now() - created_at)) FILTER (
+                               WHERE status = 'queued'
+                           ), 0), 0) AS oldest_queued_seconds
+                    FROM fleet_job_rollups GROUP BY tenant_id
+                ), worker_usage AS (
+                    SELECT tenant_id,
+                           count(*) FILTER (
+                               WHERE last_seen_at >= now() - interval '24 hours'
+                           ) AS workers_observed,
+                           count(*) FILTER (
+                               WHERE supports_cpu AND last_seen_at >=
+                                   now() - (%s * interval '1 second')
+                           ) AS active_cpu_workers,
+                           count(*) FILTER (
+                               WHERE supports_cuda AND last_seen_at >=
+                                   now() - (%s * interval '1 second')
+                           ) AS active_cuda_workers,
+                           coalesce(sum(gpu_devices) FILTER (
+                               WHERE supports_cuda AND last_seen_at >=
+                                   now() - (%s * interval '1 second')
+                           ), 0) AS active_gpu_devices
+                    FROM fleet_worker_rollups GROUP BY tenant_id
+                )
+                SELECT ids.tenant_id, tenants.display_name,
+                       coalesce(tenants.status, 'unregistered') AS status,
+                       quotas.max_queued_jobs, quotas.max_jobs_per_hour,
+                       quotas.max_running_jobs, quotas.max_running_cuda_jobs,
+                       coalesce(jobs.queued_cpu_jobs, 0) AS queued_cpu_jobs,
+                       coalesce(jobs.queued_cuda_jobs, 0) AS queued_cuda_jobs,
+                       coalesce(jobs.active_running_cpu_jobs, 0) AS active_running_cpu_jobs,
+                       coalesce(jobs.active_running_cuda_jobs, 0) AS active_running_cuda_jobs,
+                       coalesce(jobs.jobs_submitted_last_hour, 0) AS jobs_submitted_last_hour,
+                       coalesce(workers.workers_observed, 0) AS workers_observed,
+                       coalesce(workers.active_cpu_workers, 0) AS active_cpu_workers,
+                       coalesce(workers.active_cuda_workers, 0) AS active_cuda_workers,
+                       coalesce(workers.active_gpu_devices, 0) AS active_gpu_devices,
+                       coalesce(jobs.oldest_queued_seconds, 0) AS oldest_queued_seconds,
+                       now() AS observed_at
+                FROM tenant_ids ids
+                LEFT JOIN control_plane_tenants tenants USING (tenant_id)
+                LEFT JOIN tenant_quotas quotas USING (tenant_id)
+                LEFT JOIN job_usage jobs USING (tenant_id)
+                LEFT JOIN worker_usage workers USING (tenant_id)
+                ORDER BY ids.tenant_id
+                """,
+                (
+                    active_worker_window_seconds,
+                    active_worker_window_seconds,
+                    active_worker_window_seconds,
+                ),
+            ).fetchall()
+        observed_at = datetime.now(UTC) if not rows else cast(datetime, rows[0]["observed_at"])
+        tenants = [self._tenant_fleet_summary(row) for row in rows]
+        totals = FleetResourceSnapshot(
+            queued_cpu_jobs=sum(item.queued_cpu_jobs for item in tenants),
+            queued_cuda_jobs=sum(item.queued_cuda_jobs for item in tenants),
+            active_running_cpu_jobs=sum(item.active_running_cpu_jobs for item in tenants),
+            active_running_cuda_jobs=sum(item.active_running_cuda_jobs for item in tenants),
+            jobs_submitted_last_hour=sum(item.jobs_submitted_last_hour for item in tenants),
+            workers_observed=sum(item.workers_observed for item in tenants),
+            active_cpu_workers=sum(item.active_cpu_workers for item in tenants),
+            active_cuda_workers=sum(item.active_cuda_workers for item in tenants),
+            active_gpu_devices=sum(item.active_gpu_devices for item in tenants),
+            oldest_queued_seconds=max((item.oldest_queued_seconds for item in tenants), default=0),
+        )
+        return PlatformFleetReport(
+            observed_at=observed_at,
+            active_worker_window_seconds=active_worker_window_seconds,
+            totals=totals,
+            tenants=tenants,
+        )
+
+    @staticmethod
+    def _tenant_fleet_summary(row: dict[str, object]) -> TenantFleetSummary:
+        queued_cpu = int(str(row["queued_cpu_jobs"]))
+        queued_cuda = int(str(row["queued_cuda_jobs"]))
+        running_cpu = int(str(row["active_running_cpu_jobs"]))
+        running_cuda = int(str(row["active_running_cuda_jobs"]))
+        max_queued = cast(int | None, row["max_queued_jobs"])
+        max_hourly = cast(int | None, row["max_jobs_per_hour"])
+        max_running = cast(int | None, row["max_running_jobs"])
+        max_running_cuda = cast(int | None, row["max_running_cuda_jobs"])
+        return TenantFleetSummary(
+            tenant_id=str(row["tenant_id"]),
+            display_name=str(row["display_name"]) if row["display_name"] is not None else None,
+            status=cast(Literal["active", "suspended", "unregistered"], row["status"]),
+            quota=TenantQuotaLimits(
+                max_queued_jobs=max_queued,
+                max_jobs_per_hour=max_hourly,
+                max_running_jobs=max_running,
+                max_running_cuda_jobs=max_running_cuda,
+            ),
+            saturation=FleetQuotaSaturation(
+                queued_jobs=max_queued is not None and queued_cpu + queued_cuda >= max_queued,
+                jobs_per_hour=(
+                    max_hourly is not None
+                    and int(str(row["jobs_submitted_last_hour"])) >= max_hourly
+                ),
+                running_jobs=(
+                    max_running is not None and running_cpu + running_cuda >= max_running
+                ),
+                running_cuda_jobs=(
+                    max_running_cuda is not None and running_cuda >= max_running_cuda
+                ),
+            ),
+            queued_cpu_jobs=queued_cpu,
+            queued_cuda_jobs=queued_cuda,
+            active_running_cpu_jobs=running_cpu,
+            active_running_cuda_jobs=running_cuda,
+            jobs_submitted_last_hour=int(str(row["jobs_submitted_last_hour"])),
+            workers_observed=int(str(row["workers_observed"])),
+            active_cpu_workers=int(str(row["active_cpu_workers"])),
+            active_cuda_workers=int(str(row["active_cuda_workers"])),
+            active_gpu_devices=int(str(row["active_gpu_devices"])),
+            oldest_queued_seconds=float(str(row["oldest_queued_seconds"])),
+        )
 
     @staticmethod
     def _tenant_quota(
@@ -2512,6 +2706,123 @@ class ArtifactStore:
             """CREATE TRIGGER ledger_checkpoints_append_only
                BEFORE UPDATE OR DELETE ON ledger_checkpoints
                FOR EACH ROW EXECUTE FUNCTION reject_ledger_checkpoint_mutation()"""
+        )
+
+    @staticmethod
+    def _backfill_fleet_rollups(
+        connection: psycopg.Connection[dict[str, object]],
+    ) -> None:
+        connection.execute("TRUNCATE fleet_job_rollups, fleet_worker_rollups")
+        connection.execute(
+            """
+            INSERT INTO fleet_job_rollups (
+                tenant_id, job_id, status, required_accelerator,
+                created_at, lease_expires_at, updated_at
+            )
+            SELECT tenant_id, job_id, status, required_accelerator,
+                   created_at, lease_expires_at, updated_at
+            FROM evaluation_jobs
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO fleet_worker_rollups (
+                tenant_id, worker_id, supports_cpu, supports_cuda,
+                gpu_devices, last_seen_at
+            )
+            SELECT tenant_id, worker_id,
+                   coalesce(capabilities->'accelerators' ? 'cpu', false),
+                   coalesce(capabilities->'accelerators' ? 'cuda', false),
+                   coalesce(jsonb_array_length(capabilities->'gpus'), 0),
+                   last_seen_at
+            FROM workers
+            """
+        )
+
+    @staticmethod
+    def _install_fleet_rollup_triggers(
+        connection: psycopg.Connection[dict[str, object]],
+    ) -> None:
+        connection.execute(
+            """
+            CREATE OR REPLACE FUNCTION sync_fleet_job_rollup()
+            RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+            SET search_path FROM CURRENT AS $$
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    DELETE FROM fleet_job_rollups
+                    WHERE tenant_id = OLD.tenant_id AND job_id = OLD.job_id;
+                    RETURN OLD;
+                END IF;
+                INSERT INTO fleet_job_rollups (
+                    tenant_id, job_id, status, required_accelerator,
+                    created_at, lease_expires_at, updated_at
+                ) VALUES (
+                    NEW.tenant_id, NEW.job_id, NEW.status, NEW.required_accelerator,
+                    NEW.created_at, NEW.lease_expires_at, NEW.updated_at
+                ) ON CONFLICT (tenant_id, job_id) DO UPDATE SET
+                    status = excluded.status,
+                    required_accelerator = excluded.required_accelerator,
+                    created_at = excluded.created_at,
+                    lease_expires_at = excluded.lease_expires_at,
+                    updated_at = excluded.updated_at;
+                IF TG_OP = 'UPDATE' AND
+                   (OLD.tenant_id, OLD.job_id) IS DISTINCT FROM (NEW.tenant_id, NEW.job_id) THEN
+                    DELETE FROM fleet_job_rollups
+                    WHERE tenant_id = OLD.tenant_id AND job_id = OLD.job_id;
+                END IF;
+                RETURN NEW;
+            END;
+            $$
+            """
+        )
+        connection.execute("DROP TRIGGER IF EXISTS fleet_job_rollup_sync ON evaluation_jobs")
+        connection.execute(
+            """CREATE TRIGGER fleet_job_rollup_sync
+               AFTER INSERT OR UPDATE OR DELETE ON evaluation_jobs
+               FOR EACH ROW EXECUTE FUNCTION sync_fleet_job_rollup()"""
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE FUNCTION sync_fleet_worker_rollup()
+            RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+            SET search_path FROM CURRENT AS $$
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    DELETE FROM fleet_worker_rollups
+                    WHERE tenant_id = OLD.tenant_id AND worker_id = OLD.worker_id;
+                    RETURN OLD;
+                END IF;
+                INSERT INTO fleet_worker_rollups (
+                    tenant_id, worker_id, supports_cpu, supports_cuda,
+                    gpu_devices, last_seen_at
+                ) VALUES (
+                    NEW.tenant_id, NEW.worker_id,
+                    coalesce(NEW.capabilities->'accelerators' ? 'cpu', false),
+                    coalesce(NEW.capabilities->'accelerators' ? 'cuda', false),
+                    coalesce(jsonb_array_length(NEW.capabilities->'gpus'), 0),
+                    NEW.last_seen_at
+                ) ON CONFLICT (tenant_id, worker_id) DO UPDATE SET
+                    supports_cpu = excluded.supports_cpu,
+                    supports_cuda = excluded.supports_cuda,
+                    gpu_devices = excluded.gpu_devices,
+                    last_seen_at = excluded.last_seen_at;
+                IF TG_OP = 'UPDATE' AND
+                   (OLD.tenant_id, OLD.worker_id) IS DISTINCT FROM
+                       (NEW.tenant_id, NEW.worker_id) THEN
+                    DELETE FROM fleet_worker_rollups
+                    WHERE tenant_id = OLD.tenant_id AND worker_id = OLD.worker_id;
+                END IF;
+                RETURN NEW;
+            END;
+            $$
+            """
+        )
+        connection.execute("DROP TRIGGER IF EXISTS fleet_worker_rollup_sync ON workers")
+        connection.execute(
+            """CREATE TRIGGER fleet_worker_rollup_sync
+               AFTER INSERT OR UPDATE OR DELETE ON workers
+               FOR EACH ROW EXECUTE FUNCTION sync_fleet_worker_rollup()"""
         )
 
     def _backfill_artifact_ledger(self, connection: psycopg.Connection[dict[str, object]]) -> None:
