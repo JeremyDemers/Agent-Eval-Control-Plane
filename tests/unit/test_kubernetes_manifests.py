@@ -513,6 +513,66 @@ def test_distributed_postgres_overlay_is_symmetric_and_promotion_is_opt_in() -> 
     assert application_secret["stringData"]["username"] == "aecontrol"
 
 
+def test_checkpoint_replication_is_scheduled_hardened_and_requires_both_copies() -> None:
+    root = Path("deploy/overlays/checkpoint-replication")
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    assert kustomization["resources"] == [
+        "../cloudnative-pg",
+        "service-account.yaml",
+        "cronjob.yaml",
+    ]
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+
+    service_account = yaml.safe_load((root / "service-account.yaml").read_text())
+    assert service_account["automountServiceAccountToken"] is True
+    assert service_account["metadata"]["annotations"] == {
+        "aecontrol.io/workload-identity": "replace-with-provider-binding"
+    }
+
+    cronjob = yaml.safe_load((root / "cronjob.yaml").read_text())
+    spec = cronjob["spec"]
+    assert spec["schedule"] == "30 3 * * *"
+    assert spec["timeZone"] == "Etc/UTC"
+    assert spec["concurrencyPolicy"] == "Forbid"
+    assert spec["startingDeadlineSeconds"] == 1800
+    job = spec["jobTemplate"]["spec"]
+    assert job["backoffLimit"] == 2
+    assert job["activeDeadlineSeconds"] == 600
+    assert job["ttlSecondsAfterFinished"] == 604800
+    pod = job["template"]["spec"]
+    assert pod["serviceAccountName"] == "aecontrol-checkpoint-publisher"
+    assert pod["securityContext"] == {
+        "runAsNonRoot": True,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
+    container = pod["containers"][0]
+    assert container["image"].endswith(f":{project['project']['version']}")
+    assert container["args"] == [
+        "store",
+        "checkpoint",
+        "--s3",
+        "--retention-days",
+        "90",
+        "--json",
+    ]
+    assert container["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+        "readOnlyRootFilesystem": True,
+    }
+    environment = {item["name"]: item for item in container["env"]}
+    assert environment["DATABASE_URL"]["valueFrom"]["secretKeyRef"] == {
+        "name": "aecontrol-postgres-app",
+        "key": "uri",
+    }
+    assert environment["AECONTROL_CHECKPOINT_REQUIRED_COPIES"]["value"] == "2"
+    assert (
+        environment["AECONTROL_CHECKPOINT_S3_REGION"]["value"]
+        != environment["AECONTROL_CHECKPOINT_REPLICA_S3_REGION"]["value"]
+    )
+
+
 def test_cloudnative_pg_pitr_monitoring_alerts_on_failed_and_stale_backups() -> None:
     root = Path("deploy/overlays/cloudnative-pg-pitr-monitoring")
     kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())

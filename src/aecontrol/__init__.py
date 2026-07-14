@@ -1,6 +1,10 @@
 """AgentEval Control Plane public API."""
 
-from aecontrol.checkpoints import CheckpointPublication, SignedLedgerCheckpoint
+from aecontrol.checkpoints import (
+    CheckpointObjectReceipt,
+    CheckpointPublication,
+    SignedLedgerCheckpoint,
+)
 from aecontrol.compare import compare_runs
 from aecontrol.engine import EvaluationEngine
 from aecontrol.federation import FederatedIdentity, OIDCFederationConfiguration
@@ -35,6 +39,7 @@ from aecontrol.tenants import (
 __all__ = [
     "AgentEvalClient",
     "AsyncAgentEvalClient",
+    "CheckpointObjectReceipt",
     "CheckpointPublication",
     "EvaluationEngine",
     "ExpectedGuardrailAction",

@@ -25,6 +25,7 @@
 - PostgreSQL-backed API and browser trace explorer are implemented.
 - Cross-region CloudNativePG controlled promotion is guarded by token, topology, system-ID, and
   optimistic-concurrency validation.
+- Signed ledger checkpoints publish and read-verify across independent Object Lock destinations.
 
 ## Implemented
 

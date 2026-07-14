@@ -271,7 +271,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.49.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.50.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -479,6 +479,12 @@ against any persisted checkpoint. See
 [`docs/evidence-checkpoints.md`](docs/evidence-checkpoints.md) for IAM, retention, verification, and
 failure boundaries.
 
+Checkpoint publication can require independently verified copies in two S3 Object Lock regions or
+accounts. Each destination is create-only and read back byte-for-byte; receipts bind digest, object
+version, COMPLIANCE deadline, and verification time. Partial success is safely retryable, while the
+default two-copy policy fails closed. A hardened daily Kubernetes publisher makes the durability
+claim repeatable rather than operator-dependent.
+
 CloudNativePG disaster recovery can extend to a second Kubernetes region with symmetric Barman Cloud
 archives and a guarded controlled-promotion Job. The promoter validates the demotion token and target
 system identifier, enforces an operator-version policy, uses a `resourceVersion` concurrency
@@ -510,9 +516,9 @@ The browser explorer is intentionally local-trust for this portfolio phase. The 
 backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Cross-region
-object replication and fencing outside Kubernetes remain platform-owned controls; automatic
-multi-writer operation is intentionally unsupported. Additional hosted providers and direct cloud
-KMS/HSM adapters remain in
+provider-native object replication and fencing outside Kubernetes remain platform-owned controls;
+automatic multi-writer operation is intentionally unsupported. Additional hosted providers and
+direct cloud KMS/HSM adapters remain in
 `docs/roadmap.md`.
 
 ## Project Governance

@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from aecontrol.checkpoints import (
+    CheckpointObjectReceipt,
     CheckpointPublication,
     LedgerCheckpointPayload,
     SignedLedgerCheckpoint,
@@ -143,6 +144,19 @@ def checkpoint_publication() -> CheckpointPublication:
         destination="s3://evidence/checkpoints/research/4.json",
         object_key="checkpoints/research/4.json",
         published_at=now,
+        copies=(
+            CheckpointObjectReceipt(
+                destination_id="primary",
+                destination="s3://evidence/checkpoints/research/4.json",
+                object_key="checkpoints/research/4.json",
+                region="us-east-1",
+                body_sha256="c" * 64,
+                etag='"etag"',
+                version_id="version-4",
+                retention_until=now + timedelta(days=30),
+                verified_at=now,
+            ),
+        ),
     )
 
 
