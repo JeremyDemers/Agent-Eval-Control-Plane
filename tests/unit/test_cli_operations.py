@@ -4,9 +4,15 @@ import base64
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 from typer.testing import CliRunner
 
+from aecontrol.checkpoints import (
+    FileCheckpointSink,
+    LedgerCheckpointPayload,
+    SignedLedgerCheckpoint,
+)
 from aecontrol.cli import _parse_labels, app
 from aecontrol.guardrails import (
     GuardrailConfigActivation,
@@ -552,3 +558,60 @@ def test_store_cli_generates_a_256_bit_signing_key() -> None:
 
     invalid = CliRunner().invoke(app, ["store", "generate-signing-key", "--algorithm", "rsa"])
     assert invalid.exit_code == 2
+
+
+def test_store_cli_publishes_create_only_checkpoint(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    now = datetime.now(UTC)
+    checkpoint = SignedLedgerCheckpoint(
+        payload=LedgerCheckpointPayload(
+            checkpoint_id=uuid4(),
+            tenant_id="default",
+            ledger_sequence=3,
+            ledger_entries=3,
+            ledger_head_sha256="a" * 64,
+            created_at=now,
+            retention_until=now + timedelta(days=30),
+        ),
+        payload_sha256="b" * 64,
+        signing_key_id="release-key",
+        signature="signature",
+    )
+
+    class Store:
+        def __init__(self, _database_url: str) -> None:
+            pass
+
+        def create_ledger_checkpoint(self, retention_days: int) -> SignedLedgerCheckpoint:
+            assert retention_days == 45
+            return checkpoint
+
+    monkeypatch.setattr("aecontrol.cli.ArtifactStore", Store)
+    result = CliRunner().invoke(
+        app,
+        [
+            "store",
+            "checkpoint",
+            "--output",
+            str(tmp_path),
+            "--retention-days",
+            "45",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"checkpoint {checkpoint.payload.checkpoint_id}" in result.output
+    exported = list(tmp_path.rglob("*.json"))
+    assert len(exported) == 1
+    assert exported[0].read_bytes() == checkpoint.canonical_bytes()
+
+    missing_destination = CliRunner().invoke(app, ["store", "checkpoint"])
+    assert missing_destination.exit_code == 2
+    assert "choose exactly one" in missing_destination.output
+
+    monkeypatch.setattr(
+        "aecontrol.cli.S3ObjectLockCheckpointSink.from_environment",
+        lambda: FileCheckpointSink(tmp_path / "s3"),
+    )
+    s3_result = CliRunner().invoke(app, ["store", "checkpoint", "--s3", "--retention-days", "45"])
+    assert s3_result.exit_code == 0
+    assert list((tmp_path / "s3").rglob("*.json"))

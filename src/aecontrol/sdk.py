@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from uuid import UUID
 
+from aecontrol.checkpoints import CheckpointPublication, SignedLedgerCheckpoint
 from aecontrol.guardrails import (
     ExpectedGuardrailAction,
     GuardrailConfigActivation,
@@ -130,6 +131,19 @@ class AgentEvalClient:
     def verify_artifacts(self) -> ArtifactIntegrityReport:
         return ArtifactIntegrityReport.model_validate(
             self.transport.request("GET", "/api/v1/integrity")
+        )
+
+    def ledger_checkpoints(self) -> list[SignedLedgerCheckpoint]:
+        payload = self.transport.request("GET", "/api/v1/integrity/checkpoints")
+        return [SignedLedgerCheckpoint.model_validate(item) for item in _list(payload)]
+
+    def publish_ledger_checkpoint(self, retention_days: int = 30) -> CheckpointPublication:
+        return CheckpointPublication.model_validate(
+            self.transport.request(
+                "POST",
+                "/api/v1/integrity/checkpoints",
+                {"retention_days": retention_days},
+            )
         )
 
     def tenants(self) -> list[TenantRecord]:
@@ -404,6 +418,12 @@ class AsyncAgentEvalClient:
 
     async def verify_artifacts(self) -> ArtifactIntegrityReport:
         return await asyncio.to_thread(self._sync.verify_artifacts)
+
+    async def ledger_checkpoints(self) -> list[SignedLedgerCheckpoint]:
+        return await asyncio.to_thread(self._sync.ledger_checkpoints)
+
+    async def publish_ledger_checkpoint(self, retention_days: int = 30) -> CheckpointPublication:
+        return await asyncio.to_thread(self._sync.publish_ledger_checkpoint, retention_days)
 
     async def tenants(self) -> list[TenantRecord]:
         return await asyncio.to_thread(self._sync.tenants)

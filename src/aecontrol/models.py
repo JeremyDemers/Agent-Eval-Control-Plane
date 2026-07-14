@@ -315,6 +315,14 @@ class ArtifactLedgerFailure(BaseModel):
     actual_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
+class LedgerCheckpointFailure(BaseModel):
+    checkpoint_id: UUID
+    ledger_sequence: int = Field(ge=0)
+    reason: Literal["payload_digest", "signature", "envelope", "missing_sequence", "head_mismatch"]
+    expected_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    actual_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
 class ArtifactIntegrityReport(BaseModel):
     checked: int = Field(ge=0)
     valid: int = Field(ge=0)
@@ -325,6 +333,9 @@ class ArtifactIntegrityReport(BaseModel):
     ledger_valid: int = Field(default=0, ge=0)
     ledger_head_sha256: str = Field(default="0" * 64, pattern=r"^[a-f0-9]{64}$")
     ledger_failures: list[ArtifactLedgerFailure] = Field(default_factory=list)
+    checkpoint_checked: int = Field(default=0, ge=0)
+    checkpoint_valid: int = Field(default=0, ge=0)
+    checkpoint_failures: list[LedgerCheckpointFailure] = Field(default_factory=list)
     failures: list[ArtifactIntegrityItem]
 
 

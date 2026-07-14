@@ -54,6 +54,10 @@ The same command verifies the schema v14 append-only evidence chain and exits no
 ledger failures. See [`evidence-transparency.md`](evidence-transparency.md) for ledger guarantees and
 external checkpoint requirements.
 
+Schema v16 checkpoints require an active Ed25519 private key and publish public-verifiable ledger
+heads to create-only filesystem or S3 Object Lock sinks. See
+[`evidence-checkpoints.md`](evidence-checkpoints.md).
+
 ## Rotation and HMAC Compatibility
 
 1. Retain every public key referenced by stored Ed25519 evidence.

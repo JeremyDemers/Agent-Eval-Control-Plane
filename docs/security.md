@@ -85,6 +85,11 @@ disables the trigger can truncate the chain tail unless the head digest has been
 PostgreSQL. See [`artifact-integrity.md`](artifact-integrity.md) and
 [`evidence-transparency.md`](evidence-transparency.md) for key and checkpoint boundaries.
 
+Schema v16 publishes signed heads with conditional create semantics and S3 Object Lock compliance
+retention. The audit compares those anchors with the live chain and reports privileged tail
+truncation. AgentEval does not provision buckets or IAM, and its local filesystem sink remains under
+host-administrator control. See [`evidence-checkpoints.md`](evidence-checkpoints.md).
+
 ## Repository Security
 
 `.github/workflows/security.yml` runs three independent controls:
@@ -94,7 +99,7 @@ PostgreSQL. See [`artifact-integrity.md`](artifact-integrity.md) and
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.41.0
+development-only tools so its result describes the shipped runtime environment. The v0.42.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults
