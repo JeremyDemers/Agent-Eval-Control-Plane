@@ -271,7 +271,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.52.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.53.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -358,6 +358,20 @@ uv run aecontrol nim models
 
 See [`docs/nvidia-nim.md`](docs/nvidia-nim.md) for hosted and self-hosted configuration, provenance,
 and credential boundaries.
+
+## Amazon Bedrock Runtime
+
+Agent versions prefixed with `bedrock/` use the native Amazon Bedrock Converse API with forced,
+schema-backed repair tool output, SDK credential-chain authentication, sanitized failure evidence,
+token/latency provenance, and automatic `runtime=aws-bedrock` worker placement.
+
+```bash
+AECONTROL_BEDROCK_REGION=us-east-1 uv run aecontrol bedrock doctor
+uv run aecontrol bedrock models
+```
+
+The EKS overlay adds a dedicated IRSA-authenticated worker and a model-scoped IAM policy example
+without static AWS credentials. See [`docs/aws-bedrock.md`](docs/aws-bedrock.md).
 
 ## LangGraph Runtime
 
@@ -529,8 +543,8 @@ actively hostile candidates require the optional, externally operated Kata backe
 consumes but does not install or reconfigure Kata Containers, NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Cross-region
 provider-native object replication and fencing outside Kubernetes remain platform-owned controls;
-automatic multi-writer operation is intentionally unsupported. Additional hosted providers, other
-cloud KMS products, and dedicated HSM adapters remain in `docs/roadmap.md`.
+automatic multi-writer operation is intentionally unsupported. Additional provider-specific
+adapters, other cloud KMS products, and dedicated HSM adapters remain in `docs/roadmap.md`.
 
 ## Project Governance
 

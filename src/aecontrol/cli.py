@@ -22,6 +22,7 @@ from aecontrol.agents import list_agent_versions
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key, load_auth_config
 from aecontrol.aws_kms import aws_kms_configuration_from_environment
+from aecontrol.bedrock import BedrockClient, BedrockError
 from aecontrol.checkpoints import FileCheckpointSink, checkpoint_sink_from_environment
 from aecontrol.compare import compare_runs
 from aecontrol.database import database_configuration_from_environment
@@ -78,6 +79,7 @@ jobs_app = typer.Typer(help="Durable evaluation job commands")
 ollama_app = typer.Typer(help="Ollama provider commands")
 openai_app = typer.Typer(help="OpenAI-compatible provider commands")
 nim_app = typer.Typer(help="NVIDIA NIM provider commands")
+bedrock_app = typer.Typer(help="Amazon Bedrock provider commands")
 guardrails_app = typer.Typer(help="NVIDIA NeMo Guardrails commands")
 auth_app = typer.Typer(help="API authentication commands")
 tenant_app = typer.Typer(help="Tenant resource-governance commands")
@@ -91,6 +93,7 @@ app.add_typer(jobs_app, name="jobs")
 app.add_typer(ollama_app, name="ollama")
 app.add_typer(openai_app, name="openai")
 app.add_typer(nim_app, name="nim")
+app.add_typer(bedrock_app, name="bedrock")
 app.add_typer(guardrails_app, name="guardrails")
 app.add_typer(auth_app, name="auth")
 app.add_typer(tenant_app, name="tenant")
@@ -446,7 +449,13 @@ def report(
 @plugins_app.command("list")
 def plugins_list() -> None:
     payload = {
-        "runtimes": ["deterministic_coding", "ollama_coding", "openai_compatible_coding"],
+        "runtimes": [
+            "deterministic_coding",
+            "ollama_coding",
+            "openai_compatible_coding",
+            "nvidia_nim_coding",
+            "aws_bedrock_coding",
+        ],
         "evaluators": [
             "public_test_success",
             "hidden_test_success",
@@ -1033,6 +1042,36 @@ def nim_metadata() -> None:
         console.print(f"[red]unavailable[/red] {error}")
         raise typer.Exit(1) from error
     console.print(json.dumps({"metadata": metadata, "version": deployment_version}, indent=2))
+
+
+@bedrock_app.command("doctor")
+def bedrock_doctor() -> None:
+    """Verify AWS credentials, regional access, and Bedrock model discovery."""
+    try:
+        client = BedrockClient()
+        models = asyncio.run(client.models())
+    except (BedrockError, ValueError) as error:
+        console.print(f"[red]unavailable[/red] {error}")
+        raise typer.Exit(1) from error
+    console.print(
+        f"[green]healthy[/green] Amazon Bedrock region={client.configuration.region}, "
+        f"text_models={len(models)}"
+    )
+
+
+@bedrock_app.command("models")
+def bedrock_models(json_output: bool = typer.Option(False, "--json")) -> None:
+    """List text foundation models available through Amazon Bedrock."""
+    try:
+        models = asyncio.run(BedrockClient().models())
+    except (BedrockError, ValueError) as error:
+        console.print(f"[red]unavailable[/red] {error}")
+        raise typer.Exit(1) from error
+    if json_output:
+        console.print(json.dumps([model.model_dump() for model in models], indent=2))
+        return
+    for model in models:
+        console.print(f"{model.model_id} ({model.provider_name})")
 
 
 @guardrails_app.command("configs")

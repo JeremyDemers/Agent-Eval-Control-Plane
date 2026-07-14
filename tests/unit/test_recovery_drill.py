@@ -76,7 +76,7 @@ class FakeKubernetesClient:
 def _configuration() -> RecoveryDrillConfiguration:
     return RecoveryDrillConfiguration(
         namespace="aecontrol",
-        verifier_image="ghcr.io/example/aecontrol:0.52.0",
+        verifier_image="ghcr.io/example/aecontrol:0.53.0",
         max_failed_drills=2,
     )
 
@@ -171,7 +171,7 @@ def test_recovery_drill_configuration_is_strict_and_bounded(
 ) -> None:
     options: dict[str, object] = {
         "namespace": "aecontrol",
-        "verifier_image": "ghcr.io/example/aecontrol:0.52.0",
+        "verifier_image": "ghcr.io/example/aecontrol:0.53.0",
         **updates,
     }
     with pytest.raises(ValueError, match=message):
@@ -185,7 +185,7 @@ def test_recovery_drill_configuration_loads_namespace_and_bounds_from_environmen
     namespace.write_text("aecontrol\n")
     monkeypatch.setenv("AECONTROL_KUBERNETES_NAMESPACE_FILE", str(namespace))
     monkeypatch.setenv(
-        "AECONTROL_RECOVERY_DRILL_VERIFIER_IMAGE", "ghcr.io/example/aecontrol:0.52.0"
+        "AECONTROL_RECOVERY_DRILL_VERIFIER_IMAGE", "ghcr.io/example/aecontrol:0.53.0"
     )
     monkeypatch.setenv("AECONTROL_RECOVERY_DRILL_MAX_FAILED", "3")
 

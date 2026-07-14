@@ -2111,6 +2111,10 @@ class ArtifactStore:
             runtime_label = effective_labels.setdefault("runtime", "nvidia-nim")
             if runtime_label != "nvidia-nim":
                 raise ValueError("NVIDIA NIM jobs require the runtime=nvidia-nim label")
+        if agent_version.startswith("bedrock/"):
+            runtime_label = effective_labels.setdefault("runtime", "aws-bedrock")
+            if runtime_label != "aws-bedrock":
+                raise ValueError("Amazon Bedrock jobs require the runtime=aws-bedrock label")
         job = EvaluationJob(
             suite_path=suite_path,
             agent_version=agent_version,

@@ -1,3 +1,4 @@
+import json
 import tomllib
 from pathlib import Path
 
@@ -211,6 +212,46 @@ def test_aws_kms_overlay_uses_workload_identity_without_private_keys() -> None:
     kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
     project = tomllib.loads(Path("pyproject.toml").read_text())
     assert kustomization["resources"] == ["../../kubernetes", "service-account.yaml"]
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+
+
+def test_aws_bedrock_overlay_uses_dedicated_irsa_worker_and_scoped_policy() -> None:
+    root = Path("deploy/overlays/aws-bedrock")
+    service_account = yaml.safe_load((root / "service-account.yaml").read_text())
+    worker = yaml.safe_load((root / "worker.yaml").read_text())
+    policy = json.loads((root / "iam-policy.example.json").read_text())
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+
+    assert service_account["metadata"]["name"] == "aecontrol-bedrock-worker"
+    assert service_account["metadata"]["annotations"]["eks.amazonaws.com/role-arn"].startswith(
+        "arn:aws:iam::"
+    )
+    assert service_account["automountServiceAccountToken"] is True
+    pod = worker["spec"]["template"]["spec"]
+    assert pod["serviceAccountName"] == "aecontrol-bedrock-worker"
+    container = pod["containers"][0]
+    assert "runtime=aws-bedrock" in container["command"]
+    env_names = {item["name"] for item in container["env"]}
+    assert "AECONTROL_BEDROCK_REGION" in env_names
+    assert "AWS_ACCESS_KEY_ID" not in env_names
+    assert "AWS_SECRET_ACCESS_KEY" not in env_names
+    assert container["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+    }
+
+    statements = {item["Sid"]: item for item in policy["Statement"]}
+    assert statements["DiscoverTextModels"] == {
+        "Sid": "DiscoverTextModels",
+        "Effect": "Allow",
+        "Action": "bedrock:ListFoundationModels",
+        "Resource": "*",
+    }
+    invocation = statements["InvokeApprovedFoundationModel"]
+    assert invocation["Action"] == "bedrock:InvokeModel"
+    assert invocation["Resource"].startswith("arn:aws:bedrock:us-east-1::foundation-model/")
+    assert "iam-policy.example.json" not in kustomization["resources"]
     assert kustomization["images"][0]["newTag"] == project["project"]["version"]
 
 

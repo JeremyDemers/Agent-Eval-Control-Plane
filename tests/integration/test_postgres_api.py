@@ -2046,6 +2046,17 @@ def test_capability_aware_job_placement(api_client: TestClient) -> None:
     nim_job = store.enqueue_job("examples/suites/coding_repair.yaml", "nim/meta/llama-test")
     assert nim_job.required_labels == {"runtime": "nvidia-nim"}
     store.cancel_job(nim_job.job_id)
+    bedrock_job = store.enqueue_job(
+        "examples/suites/coding_repair.yaml", "bedrock/us.anthropic.claude-test-v1:0"
+    )
+    assert bedrock_job.required_labels == {"runtime": "aws-bedrock"}
+    store.cancel_job(bedrock_job.job_id)
+    with pytest.raises(ValueError, match="runtime=aws-bedrock"):
+        store.enqueue_job(
+            "examples/suites/coding_repair.yaml",
+            "bedrock/us.anthropic.claude-test-v1:0",
+            required_labels={"runtime": "ollama"},
+        )
 
 
 def test_gpu_resource_constraints_are_atomically_admitted(api_client: TestClient) -> None:
