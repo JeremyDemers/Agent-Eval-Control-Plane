@@ -9,17 +9,19 @@ Create the database secret before applying the base:
 
 ```bash
 cp deploy/kubernetes/secret.example.yaml /tmp/aecontrol-secret.yaml
-# Replace every placeholder, including the generated artifact signing key, then:
+# Replace every placeholder with an Ed25519 key pair from
+# `aecontrol store generate-signing-key --algorithm ed25519`, then:
 kubectl apply -f /tmp/aecontrol-secret.yaml
 kubectl apply -k deploy/kubernetes
 kubectl -n aecontrol rollout status deployment/api
 kubectl -n aecontrol port-forward service/api 8000:8000
 ```
 
-The API and both worker pools receive the same external artifact-signing keyring from the Secret.
-During rotation, retain old keys in `artifact-signing-keys`, change `artifact-signing-key-id`, and
-restart every workload before verifying the store. A production cluster should source these values
-from an external secret manager rather than committing key material.
+The API and worker pools receive the private signing map and public verification map from the Secret.
+During rotation, retain old public keys, add the new private/public pair, change the active key ID, and
+restart every signing workload before verifying the store. Independent audit deployments need only
+the public map. A production cluster should source private material from an external secret manager
+rather than committing it.
 
 API, CPU worker, full-GPU worker, and MIG worker pods run as non-root with Kubernetes
 `RuntimeDefault` seccomp confinement. Every application container disables privilege escalation and
@@ -27,7 +29,7 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.38.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.39.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
