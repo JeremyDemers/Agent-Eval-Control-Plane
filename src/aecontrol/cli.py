@@ -28,6 +28,7 @@ from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.gate import evaluate_gate, load_policy
 from aecontrol.guardrails import GuardrailsClient, GuardrailsError, guardrail_bundle_digest
 from aecontrol.hardware import detect_worker_capabilities
+from aecontrol.integrity import ED25519, HMAC_SHA256, generate_ed25519_keypair
 from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, EvaluationRun, GateOutcome, JobStatus, RunComparison
 from aecontrol.nim import NIMClient
@@ -295,6 +296,11 @@ def store_verify(
             f"artifact verification: {report.valid}/{report.checked} valid "
             f"({report.signed} signed, {report.unsigned} unsigned)"
         )
+        if report.signature_algorithms:
+            algorithms = ", ".join(
+                f"{algorithm}={count}" for algorithm, count in report.signature_algorithms.items()
+            )
+            console.print(f"signature algorithms: {algorithms}")
         for failure in report.failures:
             console.print(
                 f"- {failure.artifact_type} {failure.artifact_id}: {failure.failure_kind} failure"
@@ -304,9 +310,25 @@ def store_verify(
 
 
 @store_app.command("generate-signing-key")
-def store_generate_signing_key() -> None:
-    """Generate a base64-encoded 256-bit artifact signing key."""
-    console.print(base64.b64encode(secrets.token_bytes(32)).decode("ascii"))
+def store_generate_signing_key(
+    algorithm: str = typer.Option(HMAC_SHA256, "--algorithm"),
+) -> None:
+    """Generate HMAC key material or an Ed25519 key pair."""
+    if algorithm == HMAC_SHA256:
+        console.print(base64.b64encode(secrets.token_bytes(32)).decode("ascii"))
+        return
+    if algorithm != ED25519:
+        raise typer.BadParameter(
+            f"must be {HMAC_SHA256!r} or {ED25519!r}", param_hint="--algorithm"
+        )
+    private_key, public_key = generate_ed25519_keypair()
+    console.print_json(
+        data={
+            "algorithm": ED25519,
+            "private_key": base64.b64encode(private_key).decode("ascii"),
+            "public_key": base64.b64encode(public_key).decode("ascii"),
+        }
+    )
 
 
 @store_app.command("compare")

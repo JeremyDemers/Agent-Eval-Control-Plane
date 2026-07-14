@@ -262,7 +262,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.38.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.39.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -423,23 +423,24 @@ AECONTROL_AUTH_CONFIG=auth.yaml make serve
 
 See [`docs/authentication.md`](docs/authentication.md) for configuration and rotation guidance.
 
-## Signed Artifact Authenticity
+## Asymmetric Artifact Attestations
 
-Persisted runs, comparisons, and NeMo Guardrails checks carry canonical SHA-256 digests and can be
-authenticated with an HMAC keyring held outside PostgreSQL. Reads fail closed on digest mismatch,
-invalid signature, or an unavailable historical key; audits separately report signed and legacy
-unsigned evidence without returning artifact payloads.
+Persisted runs, comparisons, and NeMo Guardrails checks carry canonical SHA-256 digests and versioned
+signature envelopes. Ed25519 workers sign with private keys held outside PostgreSQL while independent
+auditors verify with public keys only. Reads fail closed on digest mismatch, invalid signature, or an
+unavailable historical key; audits report HMAC, Ed25519, and legacy unsigned evidence separately
+without returning artifact payloads. Schema v13 migrates existing HMAC signatures in place.
 
 ```bash
-uv run aecontrol store generate-signing-key
+uv run aecontrol store generate-signing-key --algorithm ed25519
 uv run aecontrol store verify
 curl http://127.0.0.1:8000/api/v1/integrity
 ```
 
-Schema v7 adds optional HMAC-SHA256 signatures and rotation-friendly key IDs while preserving
-in-place upgrades and readable unsigned legacy evidence. See
-[`docs/artifact-integrity.md`](docs/artifact-integrity.md) for configuration, rotation, and threat
-model limits.
+Schema v7 introduced HMAC signatures; schema v13 preserves them inside the algorithm-aware envelope
+while retaining readable unsigned legacy evidence. See
+[`docs/artifact-integrity.md`](docs/artifact-integrity.md) for public-verifier configuration,
+mixed-algorithm rotation, and threat-model limits.
 
 ## Current Limitations
 
@@ -447,8 +448,9 @@ The browser explorer is intentionally local-trust for this portfolio phase. The 
 backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Automated
-restore drills, cross-region promotion, additional hosted providers, immutable evidence storage,
-self-service tenant administration, and cross-tenant fleet analytics remain in `docs/roadmap.md`.
+restore drills, cross-region promotion, additional hosted providers, retention-locked evidence
+exports, remote KMS signing, self-service tenant administration, and cross-tenant fleet analytics
+remain in `docs/roadmap.md`.
 
 ## Project Governance
 

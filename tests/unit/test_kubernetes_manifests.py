@@ -64,7 +64,13 @@ def test_kubernetes_workloads_enforce_operational_contracts() -> None:
             if "valueFrom" in item
         }
         assert env["AECONTROL_ARTIFACT_SIGNING_KEY_ID"]["key"] == "artifact-signing-key-id"
-        assert env["AECONTROL_ARTIFACT_SIGNING_KEYS"]["key"] == "artifact-signing-keys"
+        assert env["AECONTROL_ARTIFACT_SIGNING_ALGORITHM"]["key"] == "artifact-signing-algorithm"
+        assert (
+            env["AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS"]["key"] == "artifact-ed25519-private-keys"
+        )
+        assert (
+            env["AECONTROL_ARTIFACT_ED25519_PUBLIC_KEYS"]["key"] == "artifact-ed25519-public-keys"
+        )
 
 
 def test_kustomization_pins_release_image_and_secret_is_not_committed() -> None:
@@ -81,7 +87,9 @@ def test_kustomization_pins_release_image_and_secret_is_not_committed() -> None:
     assert secret["stringData"]["password"] == "replace-me"
     assert secret["stringData"]["nvidia-api-key"] == "replace-me"
     assert secret["stringData"]["artifact-signing-key-id"] == "portfolio-2026-07"
-    assert "portfolio-2026-07" in secret["stringData"]["artifact-signing-keys"]
+    assert secret["stringData"]["artifact-signing-algorithm"] == "ed25519"
+    assert "portfolio-2026-07" in secret["stringData"]["artifact-ed25519-private-keys"]
+    assert "portfolio-2026-07" in secret["stringData"]["artifact-ed25519-public-keys"]
 
 
 def test_keda_overlay_scales_cpu_and_gpu_queues_independently() -> None:

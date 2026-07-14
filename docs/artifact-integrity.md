@@ -1,60 +1,78 @@
 # Artifact Integrity and Authenticity
 
 AgentEval stores complete evaluation runs, release comparisons, and NeMo Guardrails checks as
-PostgreSQL JSONB evidence. SHA-256 digests use recursively sorted canonical JSON,
-normalized signed zero, compact separators, ASCII escaping, and rejection of non-finite numbers.
+PostgreSQL JSONB evidence. SHA-256 digests use recursively sorted canonical JSON, normalized signed
+zero, compact separators, ASCII escaping, and rejection of non-finite numbers.
 
-An optional external HMAC-SHA256 keyring authenticates each digest together with its artifact type
-and UUID. The active key signs new writes; retained historical keys verify evidence created before a
-rotation. PostgreSQL stores only the key ID and signature, never the key material.
+Schema v13 stores a versioned signature envelope containing algorithm, key ID, and signature. Ed25519
+is the preferred mode: API and worker processes sign with an external private key, while audit-only
+processes verify with the public key and have no authority to create evidence. PostgreSQL stores only
+the envelope and never stores configured key material. Existing HMAC-SHA256 rows are migrated into
+the envelope without being resigned, and the legacy HMAC environment remains supported.
 
-Generate and configure a 256-bit key before starting the API or workers:
+## Ed25519 Setup
+
+Generate a raw 32-byte Ed25519 private seed and its 32-byte public key:
 
 ```bash
-AECONTROL_ARTIFACT_SIGNING_KEY_ID=portfolio-2026-07
-AECONTROL_ARTIFACT_SIGNING_KEYS="{\"portfolio-2026-07\":\"$(uv run aecontrol store generate-signing-key)\"}"
-export AECONTROL_ARTIFACT_SIGNING_KEY_ID AECONTROL_ARTIFACT_SIGNING_KEYS
+KEY_ID=portfolio-2026-07
+KEY_PAIR="$(uv run aecontrol store generate-signing-key --algorithm ed25519)"
+export AECONTROL_ARTIFACT_SIGNING_KEY_ID="$KEY_ID"
+export AECONTROL_ARTIFACT_SIGNING_ALGORITHM=ed25519
+export AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS="$(
+  jq -c --arg id "$KEY_ID" '{($id): .private_key}' <<<"$KEY_PAIR"
+)"
+export AECONTROL_ARTIFACT_ED25519_PUBLIC_KEYS="$(
+  jq -c --arg id "$KEY_ID" '{($id): .public_key}' <<<"$KEY_PAIR"
+)"
 ```
 
-Both variables must be set together. The keyring must be a non-empty JSON object whose values are
-base64-encoded keys of at least 32 bytes. Invalid configuration stops the process instead of silently
-disabling signing.
+Invalid base64, key lengths, IDs, algorithms, and mismatched private/public pairs stop startup. New
+writes persist payload, digest, and signature envelope in one transaction. Reads recompute the digest,
+verify the envelope, and only then perform Pydantic validation. A mismatch, missing historical key,
+or incomplete envelope returns HTTP 409 without returning or rendering the untrusted payload.
 
-New writes persist payload, digest, key ID, and signature in one transaction. Full artifact reads
-recompute the digest, verify any signature, and only then perform Pydantic validation. A mismatch,
-missing historical key, or incomplete signature returns HTTP 409; the untrusted payload is not
-rendered or returned. Summary and queue records remain available for incident diagnosis.
+## Public-Only Audit
+
+An independent audit process needs only `AECONTROL_ARTIFACT_ED25519_PUBLIC_KEYS`. Leave the active key
+ID, algorithm, and private map unset. It can run verification but cannot sign a new artifact:
 
 ```bash
+unset AECONTROL_ARTIFACT_SIGNING_KEY_ID
+unset AECONTROL_ARTIFACT_SIGNING_ALGORITHM
+unset AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS
+export AECONTROL_ARTIFACT_ED25519_PUBLIC_KEYS='{"portfolio-2026-07":"base64-public-key"}'
 uv run aecontrol store verify
 curl http://127.0.0.1:8000/api/v1/integrity
 ```
 
-The audit reports checked, valid, signed, and unsigned counts. Failures identify digest mismatch,
-signature mismatch, or unavailable signing key and include the artifact type, UUID, and digests, but
-never artifact payloads or key material. Schema v7 upgrades older databases in place and leaves
-existing evidence unsigned and readable so operators can distinguish migration history from faults.
+The audit reports checked, valid, signed, unsigned, and per-algorithm counts. Failures identify digest
+mismatch, signature mismatch, or unavailable verification keys and include artifact type, UUID,
+algorithm, key ID, and digests, but never artifact payloads or private material.
 
-## Key Rotation
+## Rotation and HMAC Compatibility
 
-1. Add the new base64 key to `AECONTROL_ARTIFACT_SIGNING_KEYS` while retaining every key ID referenced
-   by existing signed evidence.
-2. Set `AECONTROL_ARTIFACT_SIGNING_KEY_ID` to the new ID and restart all API and worker processes with
-   the same keyring.
-3. Confirm `uv run aecontrol store verify` reports every artifact valid before retiring an old key.
+1. Retain every public key referenced by stored Ed25519 evidence.
+2. Add a new private/public pair, change the active key ID, and restart all signing processes.
+3. Confirm `aecontrol store verify` reports every artifact valid before removing an old private key.
+4. Keep old public keys available for the entire evidence-retention window.
 
-Removing a key does not rewrite evidence. Reads of artifacts signed by that key fail closed and the
-audit reports `missing_signing_key`. This makes accidental early retirement immediately visible.
+Removing a public key does not rewrite evidence. Reads of artifacts signed by that key fail closed and
+the audit reports `missing_signing_key`, making early retirement immediately visible.
+
+Legacy deployments may continue using `AECONTROL_ARTIFACT_SIGNING_KEYS` with
+`AECONTROL_ARTIFACT_SIGNING_KEY_ID`; the algorithm defaults to `hmac-sha256`. During migration, load
+the old HMAC map alongside the Ed25519 maps, set the active algorithm to `ed25519`, and use the audit's
+per-algorithm counts to track historical HMAC evidence.
 
 ## Threat Model
 
-Canonical SHA-256 detects accidental changes. HMAC additionally protects against an attacker who can
-write PostgreSQL payloads and digests but cannot access the external keyring. Domain separation binds
-the signature to AgentEval's format version, artifact type, UUID, and digest, preventing a valid
-signature from being copied to another record type or identity.
+Canonical SHA-256 detects accidental changes. Domain-separated signatures bind AgentEval's format
+version, artifact type, UUID, and digest, preventing a valid signature from being copied to another
+record. Ed25519 lets auditors verify with non-secret material and prevents a compromised audit process
+or PostgreSQL writer from forging evidence.
 
-HMAC is shared-key authentication, not a public-key digital signature: any process with a signing key
-can create valid signatures, so it does not provide nonrepudiation. An attacker who compromises an
-API or worker process, Kubernetes Secret, or external secret manager can forge evidence. PostgreSQL
-rows are also not immutable. Production systems requiring independent attestation should use a KMS
-or asymmetric signing service and export retention-locked copies to immutable object storage.
+An attacker who compromises an active API or worker private key can still forge signatures. Database
+rows are not retention locked, and local private-key loading is not hardware-backed custody.
+Production systems requiring stronger separation should use a remote KMS/HSM signing adapter and
+export signed envelopes to versioned, retention-locked object storage.

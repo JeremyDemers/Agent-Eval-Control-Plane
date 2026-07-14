@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -539,3 +540,15 @@ def test_store_cli_generates_a_256_bit_signing_key() -> None:
 
     assert result.exit_code == 0
     assert len(base64.b64decode(result.output.strip(), validate=True)) == 32
+
+    asymmetric = CliRunner().invoke(
+        app, ["store", "generate-signing-key", "--algorithm", "ed25519"]
+    )
+    assert asymmetric.exit_code == 0
+    key_pair = json.loads(asymmetric.output)
+    assert key_pair["algorithm"] == "ed25519"
+    assert len(base64.b64decode(key_pair["private_key"], validate=True)) == 32
+    assert len(base64.b64decode(key_pair["public_key"], validate=True)) == 32
+
+    invalid = CliRunner().invoke(app, ["store", "generate-signing-key", "--algorithm", "rsa"])
+    assert invalid.exit_code == 2
