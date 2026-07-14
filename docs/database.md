@@ -200,3 +200,9 @@ reviewed Kustomize cutover to the restore Secret's `uri` key. Preserve the faile
 then configure a new write destination before enabling backups on the promoted cluster. Removing
 `recoveryTarget` from a copy of the template performs recovery through the latest available WAL
 instead of timestamp-based PITR.
+
+For recurring evidence, the optional `deploy/overlays/cloudnative-pg-recovery-drill` overlay restores
+through the latest archived WAL each Sunday, runs the same verifier, publishes its bounded report to
+an S3 Object Lock bucket, removes successful candidates, and retains at most two failed candidates.
+It uses a namespaced Role limited to CloudNativePG Clusters and Kubernetes Jobs. See the scheduled
+drill section in [`recovery-verification.md`](recovery-verification.md) before enabling it.

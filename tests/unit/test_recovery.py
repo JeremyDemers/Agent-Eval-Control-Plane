@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -14,9 +15,12 @@ from aecontrol.recovery import (
     MAX_CHECKPOINT_BYTES,
     RecoveryCheckpointResult,
     RecoveryDrillReport,
+    RecoveryReportPublicationError,
     RecoveryVerificationFailure,
     RecoveryVerifier,
+    S3ObjectLockRecoveryReportSink,
     load_recovery_checkpoint,
+    load_recovery_checkpoint_directory,
 )
 
 
@@ -74,6 +78,26 @@ def test_recovery_checkpoint_loader_rejects_symlinks(tmp_path: Path) -> None:
         load_recovery_checkpoint(link)
 
 
+def test_recovery_checkpoint_directory_is_sorted_and_bounded(tmp_path: Path) -> None:
+    first = _checkpoint()
+    second = _checkpoint()
+    (tmp_path / "b.json").write_bytes(second.canonical_bytes())
+    (tmp_path / "a.json").write_bytes(first.canonical_bytes())
+    (tmp_path / "ignored.txt").write_text("not a checkpoint")
+
+    assert load_recovery_checkpoint_directory(tmp_path) == [first, second]
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(ValueError, match="contains no JSON"):
+        load_recovery_checkpoint_directory(empty)
+
+    link = tmp_path / "linked-directory"
+    link.symlink_to(empty, target_is_directory=True)
+    with pytest.raises(ValueError, match="non-symlink directory"):
+        load_recovery_checkpoint_directory(link)
+
+
 @pytest.mark.parametrize(
     ("options", "message"),
     [
@@ -94,6 +118,13 @@ def test_recovery_verifier_requires_external_checkpoint() -> None:
 
     with pytest.raises(ValueError, match="at least one"):
         verifier.verify([])
+
+    checkpoints = [_checkpoint() for _ in range(17)]
+    with pytest.raises(ValueError, match="at most 16"):
+        verifier.verify(checkpoints)
+
+    with pytest.raises(ValueError, match="Kubernetes DNS label"):
+        verifier.verify([_checkpoint()], drill_id="Invalid_Drill")
 
 
 def test_recovery_cli_emits_machine_report_and_fails_closed(
@@ -118,9 +149,12 @@ def test_recovery_cli_emits_machine_report_and_fails_closed(
         signed_artifacts=0,
         unsigned_artifacts=0,
         valid=False,
+        failure_count=1,
+        failures_truncated=False,
         failures=[failure],
     )
     report = RecoveryDrillReport(
+        drill_id="drill-20260714t120000z",
         started_at=now,
         completed_at=now,
         database="aecontrol_restore",
@@ -133,6 +167,8 @@ def test_recovery_cli_emits_machine_report_and_fails_closed(
         checkpoints_valid=0,
         entries_checked=0,
         success=False,
+        failure_count=1,
+        failures_truncated=False,
         checkpoint_results=[checkpoint_result],
         failures=[failure],
     )
@@ -141,7 +177,13 @@ def test_recovery_cli_emits_machine_report_and_fails_closed(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
-        def verify(self, _checkpoints: list[SignedLedgerCheckpoint]) -> RecoveryDrillReport:
+        def verify(
+            self,
+            _checkpoints: list[SignedLedgerCheckpoint],
+            *,
+            drill_id: str | None = None,
+        ) -> RecoveryDrillReport:
+            assert drill_id is None
             return report
 
     monkeypatch.setattr("aecontrol.cli.RecoveryVerifier", Verifier)
@@ -157,3 +199,105 @@ def test_recovery_cli_emits_machine_report_and_fails_closed(
     assert "aecontrol_restore" in result.output
     assert "postgresql://" not in result.output
     assert payload.strip() == result.output.strip()
+
+
+class _PreconditionFailedError(Exception):
+    def __init__(self) -> None:
+        self.response = {"Error": {"Code": "PreconditionFailed"}}
+
+
+class _FakeS3Client:
+    def __init__(self, *, lock_enabled: bool = True, duplicate: bool = False) -> None:
+        self.lock_enabled = lock_enabled
+        self.duplicate = duplicate
+        self.put: dict[str, Any] | None = None
+        self.metadata: dict[str, str] = {}
+
+    def get_object_lock_configuration(self, **_kwargs: Any) -> dict[str, Any]:
+        state = "Enabled" if self.lock_enabled else "Disabled"
+        return {"ObjectLockConfiguration": {"ObjectLockEnabled": state}}
+
+    def put_object(self, **kwargs: Any) -> dict[str, Any]:
+        self.put = kwargs
+        if self.duplicate:
+            raise _PreconditionFailedError
+        self.metadata = kwargs["Metadata"]
+        return {}
+
+    def head_object(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"Metadata": self.metadata}
+
+
+def test_recovery_report_archive_is_create_only_compliance_locked_and_idempotent() -> None:
+    now = datetime.now(UTC)
+    report = RecoveryDrillReport(
+        drill_id="drill-20260714t120000z",
+        started_at=now,
+        completed_at=now,
+        database="aecontrol_restore",
+        schema_name="public",
+        expected_schema_version=18,
+        observed_schema_version=18,
+        transaction_read_only=True,
+        recovery_in_progress=False,
+        checkpoints_checked=1,
+        checkpoints_valid=1,
+        entries_checked=7,
+        success=True,
+        failure_count=0,
+        failures_truncated=False,
+        checkpoint_results=[],
+        failures=[],
+    )
+    client = _FakeS3Client()
+    sink = S3ObjectLockRecoveryReportSink(client, "evidence", "drills/recovery")
+
+    publication = sink.publish(report, retention_days=90)
+
+    assert publication.destination.startswith("s3://evidence/drills/recovery/")
+    assert publication.object_key.endswith(f"/{report.drill_id}.json")
+    assert client.put is not None
+    assert client.put["Body"] == report.canonical_bytes()
+    assert client.put["IfNoneMatch"] == "*"
+    assert client.put["ObjectLockMode"] == "COMPLIANCE"
+    assert client.put["Metadata"]["drill-id"] == report.drill_id
+
+    client.duplicate = True
+    assert sink.publish(report).object_key == publication.object_key
+
+    with pytest.raises(RecoveryReportPublicationError, match="Object Lock"):
+        S3ObjectLockRecoveryReportSink(_FakeS3Client(lock_enabled=False), "evidence").publish(
+            report
+        )
+
+    with pytest.raises(ValueError, match="normalized"):
+        S3ObjectLockRecoveryReportSink(client, "evidence", "../escape")
+    with pytest.raises(ValueError, match="normalized"):
+        S3ObjectLockRecoveryReportSink(client, "bad\nbucket")
+
+
+def test_recovery_result_records_truncated_failure_count() -> None:
+    checkpoint = _checkpoint()
+    failures = [
+        RecoveryVerificationFailure(
+            code="artifact_missing",
+            tenant_id="research",
+            checkpoint_id=checkpoint.payload.checkpoint_id,
+        )
+        for _ in range(20)
+    ]
+
+    result = RecoveryVerifier._checkpoint_result(
+        checkpoint,
+        age_seconds=1,
+        entries_checked=25,
+        signed_artifacts=0,
+        unsigned_artifacts=0,
+        failure_count=25,
+        failures=failures,
+    )
+
+    assert result.valid is False
+    assert result.failure_count == 25
+    assert result.failures_truncated is True
+    assert len(result.failures) == 20

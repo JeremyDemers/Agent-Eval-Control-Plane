@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import hmac
 import os
 import re
 import stat
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import Literal, cast
-from uuid import UUID
+from pathlib import Path, PurePosixPath
+from typing import Any, Literal, Protocol, cast
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg import sql
@@ -23,6 +25,7 @@ from aecontrol.integrity import (
     LEDGER_GENESIS_SHA256,
     ArtifactKeyring,
     artifact_digest,
+    canonical_json_bytes,
     ledger_entry_digest,
 )
 from aecontrol.store import SCHEMA_VERSION
@@ -30,6 +33,11 @@ from aecontrol.store import SCHEMA_VERSION
 MAX_CHECKPOINT_BYTES = 1024 * 1024
 DEFAULT_MAX_CHECKPOINT_AGE_HOURS = 48
 DEFAULT_MAX_LEDGER_ENTRIES = 100_000
+MAX_RECOVERY_CHECKPOINTS = 16
+MAX_REPORTED_FAILURES_PER_CHECKPOINT = 20
+DRILL_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$|^[a-z0-9]$"
+S3_BUCKET_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,254}$")
+S3_PREFIX_PART_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 RecoveryFailureCode = Literal[
     "schema_metadata",
@@ -77,12 +85,15 @@ class RecoveryCheckpointResult(BaseModel):
     signed_artifacts: int = Field(ge=0)
     unsigned_artifacts: int = Field(ge=0)
     valid: bool
+    failure_count: int = Field(ge=0)
+    failures_truncated: bool
     failures: list[RecoveryVerificationFailure]
 
 
 class RecoveryDrillReport(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    drill_id: str = Field(pattern=DRILL_ID_PATTERN)
     started_at: datetime
     completed_at: datetime
     database: str
@@ -95,12 +106,147 @@ class RecoveryDrillReport(BaseModel):
     checkpoints_valid: int = Field(ge=0)
     entries_checked: int = Field(ge=0)
     success: bool
+    failure_count: int = Field(ge=0)
+    failures_truncated: bool
     checkpoint_results: list[RecoveryCheckpointResult]
     failures: list[RecoveryVerificationFailure]
+
+    def canonical_bytes(self) -> bytes:
+        return canonical_json_bytes(self.model_dump(mode="json"))
+
+
+class RecoveryReportPublication(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    drill_id: str = Field(pattern=DRILL_ID_PATTERN)
+    destination: str
+    object_key: str
+    report_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    published_at: datetime
+    retention_until: datetime
 
 
 class RecoveryVerificationError(RuntimeError):
     """The recovery database could not be safely inspected."""
+
+
+class RecoveryReportPublicationError(RuntimeError):
+    """A recovery report could not be archived immutably."""
+
+
+class RecoveryReportS3Client(Protocol):
+    def get_object_lock_configuration(self, **kwargs: Any) -> dict[str, Any]: ...
+
+    def put_object(self, **kwargs: Any) -> dict[str, Any]: ...
+
+    def head_object(self, **kwargs: Any) -> dict[str, Any]: ...
+
+
+class S3ObjectLockRecoveryReportSink:
+    def __init__(
+        self,
+        client: RecoveryReportS3Client,
+        bucket: str,
+        prefix: str = "aecontrol/recovery-reports",
+    ) -> None:
+        normalized = PurePosixPath(prefix.strip("/"))
+        if (
+            not S3_BUCKET_PATTERN.fullmatch(bucket)
+            or not prefix.strip("/")
+            or any(
+                part in {"", ".", ".."} or not S3_PREFIX_PART_PATTERN.fullmatch(part)
+                for part in normalized.parts
+            )
+        ):
+            raise ValueError("S3 recovery report bucket and prefix must be normalized")
+        self.client = client
+        self.bucket = bucket
+        self.prefix = str(normalized)
+
+    @classmethod
+    def from_environment(cls) -> S3ObjectLockRecoveryReportSink | None:
+        bucket = os.getenv("AECONTROL_RECOVERY_REPORT_S3_BUCKET")
+        if not bucket:
+            return None
+        try:
+            import boto3  # type: ignore[import-untyped]
+            from botocore.config import Config  # type: ignore[import-untyped]
+        except ImportError as error:
+            raise RuntimeError("boto3 runtime dependency is unavailable") from error
+        client = boto3.client(
+            "s3",
+            region_name=os.getenv("AECONTROL_RECOVERY_REPORT_S3_REGION"),
+            endpoint_url=os.getenv("AECONTROL_RECOVERY_REPORT_S3_ENDPOINT"),
+            config=Config(
+                connect_timeout=2,
+                read_timeout=10,
+                retries={"max_attempts": 3, "mode": "standard"},
+            ),
+        )
+        return cls(
+            client,
+            bucket,
+            os.getenv("AECONTROL_RECOVERY_REPORT_S3_PREFIX", "aecontrol/recovery-reports"),
+        )
+
+    def publish(
+        self, report: RecoveryDrillReport, retention_days: int = 90
+    ) -> RecoveryReportPublication:
+        if not 1 <= retention_days <= 3650:
+            raise ValueError("recovery report retention must be between 1 and 3650 days")
+        try:
+            configuration = self.client.get_object_lock_configuration(Bucket=self.bucket)
+        except Exception as error:
+            code = _s3_error_code(error, default="unknown")
+            raise RecoveryReportPublicationError(
+                f"could not verify S3 Object Lock configuration: {code}"
+            ) from error
+        if configuration.get("ObjectLockConfiguration", {}).get("ObjectLockEnabled") != "Enabled":
+            raise RecoveryReportPublicationError("S3 bucket does not have Object Lock enabled")
+
+        day = report.completed_at.astimezone(UTC).strftime("%Y/%m/%d")
+        key = f"{self.prefix}/{day}/{report.drill_id}.json"
+        body = report.canonical_bytes()
+        digest = hashlib.sha256(body).hexdigest()
+        retention_until = datetime.now(UTC) + timedelta(days=retention_days)
+        try:
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=body,
+                ContentType="application/json",
+                ChecksumSHA256=base64.b64encode(hashlib.sha256(body).digest()).decode(),
+                Metadata={"recovery-report-sha256": digest, "drill-id": report.drill_id},
+                ObjectLockMode="COMPLIANCE",
+                ObjectLockRetainUntilDate=retention_until,
+                IfNoneMatch="*",
+            )
+        except Exception as error:
+            code = _s3_error_code(error)
+            if code not in {"PreconditionFailed", "412"}:
+                raise RecoveryReportPublicationError(
+                    f"S3 recovery report publication failed: {code}"
+                ) from error
+            try:
+                existing = self.client.head_object(Bucket=self.bucket, Key=key)
+            except Exception as head_error:
+                head_code = _s3_error_code(head_error, default="unknown")
+                raise RecoveryReportPublicationError(
+                    f"could not verify existing S3 recovery report: {head_code}"
+                ) from head_error
+            metadata = existing.get("Metadata", {})
+            if metadata.get("recovery-report-sha256") != digest:
+                raise RecoveryReportPublicationError(
+                    "S3 recovery report key already contains different bytes"
+                ) from error
+        return RecoveryReportPublication(
+            drill_id=report.drill_id,
+            destination=f"s3://{self.bucket}/{key}",
+            object_key=key,
+            report_sha256=digest,
+            published_at=datetime.now(UTC),
+            retention_until=retention_until,
+        )
 
 
 def load_recovery_checkpoint(path: Path) -> SignedLedgerCheckpoint:
@@ -128,6 +274,23 @@ def load_recovery_checkpoint(path: Path) -> SignedLedgerCheckpoint:
         raise ValueError(f"checkpoint is not a valid signed envelope: {path}") from error
 
 
+def load_recovery_checkpoint_directory(directory: Path) -> list[SignedLedgerCheckpoint]:
+    try:
+        metadata = directory.lstat()
+    except OSError as error:
+        raise ValueError(f"checkpoint directory is unavailable: {directory}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError(f"checkpoint directory must be a non-symlink directory: {directory}")
+    paths = sorted(directory.glob("*.json"))
+    if not paths:
+        raise ValueError(f"checkpoint directory contains no JSON envelopes: {directory}")
+    if len(paths) > MAX_RECOVERY_CHECKPOINTS:
+        raise ValueError(
+            f"checkpoint directory contains more than {MAX_RECOVERY_CHECKPOINTS} envelopes"
+        )
+    return [load_recovery_checkpoint(path) for path in paths]
+
+
 class RecoveryVerifier:
     """Read-only verification of a restored PostgreSQL database against signed heads."""
 
@@ -152,9 +315,19 @@ class RecoveryVerifier:
         self.max_checkpoint_age = timedelta(hours=max_checkpoint_age_hours)
         self.max_ledger_entries = max_ledger_entries
 
-    def verify(self, checkpoints: list[SignedLedgerCheckpoint]) -> RecoveryDrillReport:
+    def verify(
+        self,
+        checkpoints: list[SignedLedgerCheckpoint],
+        *,
+        drill_id: str | None = None,
+    ) -> RecoveryDrillReport:
         if not checkpoints:
             raise ValueError("at least one recovery checkpoint is required")
+        if len(checkpoints) > MAX_RECOVERY_CHECKPOINTS:
+            raise ValueError(f"at most {MAX_RECOVERY_CHECKPOINTS} recovery checkpoints are allowed")
+        resolved_drill_id = drill_id or f"drill-{uuid4().hex}"
+        if not re.fullmatch(DRILL_ID_PATTERN, resolved_drill_id):
+            raise ValueError("recovery drill ID must be a lowercase Kubernetes DNS label")
         started_at = datetime.now(UTC)
         database = "unknown"
         observed_version: int | None = None
@@ -207,7 +380,9 @@ class RecoveryVerifier:
         completed_at = max(completed_at, datetime.now(UTC))
         checkpoint_failures = [failure for result in results for failure in result.failures]
         all_failures = [*failures, *checkpoint_failures]
+        failure_count = len(failures) + sum(result.failure_count for result in results)
         return RecoveryDrillReport(
+            drill_id=resolved_drill_id,
             started_at=started_at,
             completed_at=completed_at,
             database=database,
@@ -219,7 +394,9 @@ class RecoveryVerifier:
             checkpoints_checked=len(results),
             checkpoints_valid=sum(result.valid for result in results),
             entries_checked=sum(result.entries_checked for result in results),
-            success=read_only and not all_failures and len(results) == len(checkpoints),
+            success=read_only and failure_count == 0 and len(results) == len(checkpoints),
+            failure_count=failure_count,
+            failures_truncated=any(result.failures_truncated for result in results),
             checkpoint_results=results,
             failures=all_failures,
         )
@@ -234,6 +411,7 @@ class RecoveryVerifier:
         age = observed_at - payload.created_at
         age_seconds = max(0.0, age.total_seconds())
         failures: list[RecoveryVerificationFailure] = []
+        failure_count = 0
 
         def fail(
             code: RecoveryFailureCode,
@@ -242,16 +420,19 @@ class RecoveryVerifier:
             artifact_type: str | None = None,
             artifact_id: UUID | None = None,
         ) -> None:
-            failures.append(
-                RecoveryVerificationFailure(
-                    code=code,
-                    tenant_id=payload.tenant_id,
-                    checkpoint_id=payload.checkpoint_id,
-                    ledger_sequence=sequence,
-                    artifact_type=artifact_type,
-                    artifact_id=artifact_id,
+            nonlocal failure_count
+            failure_count += 1
+            if len(failures) < MAX_REPORTED_FAILURES_PER_CHECKPOINT:
+                failures.append(
+                    RecoveryVerificationFailure(
+                        code=code,
+                        tenant_id=payload.tenant_id,
+                        checkpoint_id=payload.checkpoint_id,
+                        ledger_sequence=sequence,
+                        artifact_type=artifact_type,
+                        artifact_id=artifact_id,
+                    )
                 )
-            )
 
         if age < timedelta(minutes=-5):
             fail("checkpoint_future")
@@ -261,8 +442,10 @@ class RecoveryVerifier:
             fail("checkpoint_signature")
         if payload.ledger_sequence > self.max_ledger_entries:
             fail("ledger_limit")
-        if failures:
-            return self._checkpoint_result(checkpoint, age_seconds, 0, 0, 0, failures)
+        if failure_count:
+            return self._checkpoint_result(
+                checkpoint, age_seconds, 0, 0, 0, failure_count, failures
+            )
 
         connection.execute(
             "SELECT set_config('aecontrol.tenant_id', %s, true)", (payload.tenant_id,)
@@ -328,7 +511,9 @@ class RecoveryVerifier:
             ).fetchall()
         except psycopg.Error:
             fail("database_schema")
-            return self._checkpoint_result(checkpoint, age_seconds, 0, 0, 0, failures)
+            return self._checkpoint_result(
+                checkpoint, age_seconds, 0, 0, 0, failure_count, failures
+            )
 
         if len(rows) != payload.ledger_entries or len(rows) != payload.ledger_sequence:
             fail("ledger_count")
@@ -445,7 +630,13 @@ class RecoveryVerifier:
         if not hmac.compare_digest(previous, payload.ledger_head_sha256):
             fail("ledger_head")
         return self._checkpoint_result(
-            checkpoint, age_seconds, len(rows), signed, unsigned, failures
+            checkpoint,
+            age_seconds,
+            len(rows),
+            signed,
+            unsigned,
+            failure_count,
+            failures,
         )
 
     @staticmethod
@@ -455,6 +646,7 @@ class RecoveryVerifier:
         entries_checked: int,
         signed_artifacts: int,
         unsigned_artifacts: int,
+        failure_count: int,
         failures: list[RecoveryVerificationFailure],
     ) -> RecoveryCheckpointResult:
         return RecoveryCheckpointResult(
@@ -466,13 +658,21 @@ class RecoveryVerifier:
             entries_checked=entries_checked,
             signed_artifacts=signed_artifacts,
             unsigned_artifacts=unsigned_artifacts,
-            valid=not failures,
+            valid=failure_count == 0,
+            failure_count=failure_count,
+            failures_truncated=failure_count > len(failures),
             failures=failures,
         )
 
 
 def _optional_string(value: object) -> str | None:
     return str(value) if value is not None else None
+
+
+def _s3_error_code(error: Exception, *, default: str = "") -> str:
+    response = getattr(error, "response", {})
+    code = str(response.get("Error", {}).get("Code", default))
+    return code if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", code) else (default or "unknown")
 
 
 def _source_envelope(

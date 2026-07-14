@@ -40,9 +40,18 @@ from aecontrol.openai_compatible import OpenAICompatibleClient, OpenAICompatible
 from aecontrol.recovery import (
     DEFAULT_MAX_CHECKPOINT_AGE_HOURS,
     DEFAULT_MAX_LEDGER_ENTRIES,
+    RecoveryReportPublicationError,
     RecoveryVerificationError,
     RecoveryVerifier,
+    S3ObjectLockRecoveryReportSink,
     load_recovery_checkpoint,
+    load_recovery_checkpoint_directory,
+)
+from aecontrol.recovery_drill import (
+    InClusterKubernetesClient,
+    RecoveryDrillConfiguration,
+    RecoveryDrillError,
+    RecoveryDrillOrchestrator,
 )
 from aecontrol.reports import render_html
 from aecontrol.sandbox import podman_sandbox_configuration_from_environment
@@ -84,6 +93,23 @@ app.add_typer(auth_app, name="auth")
 app.add_typer(tenant_app, name="tenant")
 app.add_typer(platform_app, name="platform")
 console = Console()
+
+
+@app.command("recovery-drill")
+def recovery_drill(json_output: bool = typer.Option(False, "--json")) -> None:
+    """Run one in-cluster CloudNativePG restore and verification drill."""
+    try:
+        configuration = RecoveryDrillConfiguration.from_environment()
+        outcome = RecoveryDrillOrchestrator(
+            configuration, InClusterKubernetesClient.from_environment()
+        ).run()
+    except (RecoveryDrillError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    if json_output:
+        console.print(outcome.model_dump_json(indent=2))
+        return
+    console.print(f"recovery drill {outcome.drill_id} passed in {outcome.duration_seconds:.1f}s")
+    console.print("report archived: true; restored cluster deleted: true")
 
 
 @app.command()
@@ -515,8 +541,11 @@ def store_checkpoint(
 
 @store_app.command("verify-recovery")
 def store_verify_recovery(
-    checkpoints: list[Path] = typer.Option(
-        ..., "--checkpoint", help="Signed external checkpoint file; repeat for each tenant"
+    checkpoints: list[Path] | None = typer.Option(
+        None, "--checkpoint", help="Signed external checkpoint file; repeat for each tenant"
+    ),
+    checkpoint_directory: Path | None = typer.Option(
+        None, "--checkpoint-directory", help="Directory containing signed checkpoint JSON files"
     ),
     database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
     schema: str = typer.Option("public", "--schema"),
@@ -532,11 +561,22 @@ def store_verify_recovery(
         min=1,
         max=1_000_000,
     ),
+    drill_id: str | None = typer.Option(None, "--drill-id"),
+    report_s3: bool = typer.Option(
+        False, "--report-s3", help="Archive the canonical report in configured S3 Object Lock"
+    ),
+    report_retention_days: int = typer.Option(90, "--report-retention-days", min=1, max=3650),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     """Verify an isolated PostgreSQL recovery without mutating it."""
     try:
-        envelopes = [load_recovery_checkpoint(path) for path in checkpoints]
+        if bool(checkpoints) == (checkpoint_directory is not None):
+            raise ValueError("choose exactly one of --checkpoint or --checkpoint-directory")
+        if checkpoints:
+            envelopes = [load_recovery_checkpoint(path) for path in checkpoints]
+        else:
+            assert checkpoint_directory is not None
+            envelopes = load_recovery_checkpoint_directory(checkpoint_directory)
         verifier = RecoveryVerifier(
             database_url,
             schema=schema,
@@ -544,8 +584,19 @@ def store_verify_recovery(
             max_checkpoint_age_hours=max_checkpoint_age_hours,
             max_ledger_entries=max_ledger_entries,
         )
-        report = verifier.verify(envelopes)
-    except (RecoveryVerificationError, ValueError) as error:
+        report = verifier.verify(envelopes, drill_id=drill_id)
+        publication = None
+        if report_s3:
+            sink = S3ObjectLockRecoveryReportSink.from_environment()
+            if sink is None:
+                raise ValueError("AECONTROL_RECOVERY_REPORT_S3_BUCKET is required with --report-s3")
+            publication = sink.publish(report, report_retention_days)
+    except (
+        RecoveryReportPublicationError,
+        RecoveryVerificationError,
+        RuntimeError,
+        ValueError,
+    ) as error:
         raise typer.BadParameter(str(error)) from error
     if json_output:
         console.print(report.model_dump_json(indent=2))
@@ -573,6 +624,12 @@ def store_verify_recovery(
                 else ""
             )
             console.print(f"- failure={failure.code}{location}{sequence}")
+        if report.failures_truncated:
+            console.print(
+                f"- failures truncated: showing {len(report.failures)} of {report.failure_count}"
+            )
+        if publication is not None:
+            console.print(f"archived: {publication.destination}")
     if not report.success:
         raise typer.Exit(1)
 

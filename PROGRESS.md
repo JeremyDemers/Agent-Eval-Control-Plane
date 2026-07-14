@@ -86,7 +86,8 @@
 - Ed25519 evidence attestations and a tenant-scoped append-only transparency ledger with deletion
   detection and public-key-only verification.
 - CloudNativePG high availability, Barman Cloud WAL archiving, point-in-time recovery templates,
-  backup-health alerts, and read-only signed-checkpoint recovery verification.
+  backup-health alerts, read-only signed-checkpoint verification, scheduled restore drills, immutable
+  report archival, successful-candidate cleanup, and bounded failed-drill retention.
 - Self-service tenant lifecycle with isolated platform-operator scope, one-time key issuance,
   transactional rotation, revocation history, and fail-closed suspension.
 - Ed25519 ledger-head checkpoints with create-only local export, S3 Object Lock compliance retention,
@@ -122,5 +123,5 @@
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
-- VM-grade worker isolation, scheduled restore-cluster orchestration, direct cloud KMS/HSM signing,
-  cross-region evidence replication, and additional hosted providers remain on the roadmap.
+- VM-grade worker isolation, direct cloud KMS/HSM signing, cross-region database and evidence
+  replication, and additional hosted providers remain on the roadmap.
