@@ -29,7 +29,7 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.47.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.48.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
@@ -124,6 +124,12 @@ For continuous WAL archiving and point-in-time recovery, use the Barman Cloud pl
 configuring its S3 destination and credentials. The `cloudnative-pg-pitr-monitoring` composition adds
 backup age and failure alerts to the database PodMonitor. See [`database.md`](database.md) for the
 installation order, restore workflow, and cutover controls.
+
+After the checkpoint-publication pipeline maintains a current signed checkpoint Secret, the optional
+`cloudnative-pg-recovery-drill` overlay schedules a weekly isolated restore, read-only verification,
+immutable report publication, and bounded cleanup. Its service account is namespaced and cannot read
+Secrets, Pods, logs, or unrelated resource types. See
+[`recovery-verification.md`](recovery-verification.md) for setup and failure retention.
 
 ## NVIDIA MIG Workers
 

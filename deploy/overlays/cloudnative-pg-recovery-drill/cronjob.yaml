@@ -1,0 +1,57 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: aecontrol-recovery-drill
+  labels:
+    app.kubernetes.io/name: aecontrol-recovery-drill
+    app.kubernetes.io/part-of: aecontrol
+spec:
+  schedule: "0 4 * * 0"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 10800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: aecontrol-recovery-drill
+            app.kubernetes.io/part-of: aecontrol
+        spec:
+          serviceAccountName: aecontrol-recovery-drill
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: orchestrator
+              image: ghcr.io/jeremydemers/agent-eval-control-plane:0.48.0
+              imagePullPolicy: IfNotPresent
+              command: [/app/.venv/bin/aecontrol]
+              args: [recovery-drill, --json]
+              env:
+                - name: AECONTROL_RECOVERY_DRILL_VERIFIER_IMAGE
+                  value: ghcr.io/jeremydemers/agent-eval-control-plane:0.48.0
+                - name: AECONTROL_RECOVERY_DRILL_CHECKPOINT_SECRET
+                  value: aecontrol-recovery-checkpoints
+                - name: AECONTROL_RECOVERY_DRILL_VERIFIER_SECRET
+                  value: aecontrol-recovery-verifier
+                - name: AECONTROL_RECOVERY_DRILL_REPORT_SECRET
+                  value: aecontrol-recovery-report-s3
+                - name: AECONTROL_RECOVERY_DRILL_CHECKPOINT_MAX_AGE_HOURS
+                  value: "168"
+                - name: AECONTROL_RECOVERY_REPORT_RETENTION_DAYS
+                  value: "90"
+              resources:
+                requests: {cpu: 50m, memory: 96Mi}
+                limits: {cpu: 250m, memory: 256Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+                readOnlyRootFilesystem: true

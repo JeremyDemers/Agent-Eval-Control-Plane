@@ -362,6 +362,70 @@ def test_recovery_verification_job_is_read_only_bounded_and_uses_public_keys() -
     assert "AECONTROL_ARTIFACT_VAULT_TOKEN" not in environment
 
 
+def test_scheduled_recovery_drill_has_least_privilege_rbac_and_bounded_lifecycle() -> None:
+    root = Path("deploy/overlays/cloudnative-pg-recovery-drill")
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    assert kustomization["resources"] == [
+        "../cloudnative-pg-pitr",
+        "service-account.yaml",
+        "role.yaml",
+        "role-binding.yaml",
+        "cronjob.yaml",
+    ]
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+
+    role = yaml.safe_load((root / "role.yaml").read_text())
+    assert role["rules"] == [
+        {
+            "apiGroups": ["postgresql.cnpg.io"],
+            "resources": ["clusters"],
+            "verbs": ["create", "get", "list", "delete"],
+        },
+        {
+            "apiGroups": ["batch"],
+            "resources": ["jobs"],
+            "verbs": ["create", "get", "list", "delete"],
+        },
+    ]
+    binding = yaml.safe_load((root / "role-binding.yaml").read_text())
+    assert binding["roleRef"]["kind"] == "Role"
+    assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "aecontrol-recovery-drill"}]
+
+    cronjob = yaml.safe_load((root / "cronjob.yaml").read_text())
+    spec = cronjob["spec"]
+    assert spec["schedule"] == "0 4 * * 0"
+    assert spec["timeZone"] == "Etc/UTC"
+    assert spec["concurrencyPolicy"] == "Forbid"
+    assert spec["startingDeadlineSeconds"] == 3600
+    assert spec["successfulJobsHistoryLimit"] == 3
+    assert spec["failedJobsHistoryLimit"] == 3
+    assert spec["jobTemplate"]["spec"]["backoffLimit"] == 0
+    assert spec["jobTemplate"]["spec"]["activeDeadlineSeconds"] == 10800
+    pod = spec["jobTemplate"]["spec"]["template"]["spec"]
+    assert pod["serviceAccountName"] == "aecontrol-recovery-drill"
+    assert pod["securityContext"]["runAsNonRoot"] is True
+    container = pod["containers"][0]
+    assert container["image"].endswith(f":{project['project']['version']}")
+    assert container["command"] == ["/app/.venv/bin/aecontrol"]
+    assert container["args"] == ["recovery-drill", "--json"]
+    assert container["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+        "readOnlyRootFilesystem": True,
+    }
+    environment = {item["name"]: item["value"] for item in container["env"]}
+    assert environment["AECONTROL_RECOVERY_DRILL_VERIFIER_IMAGE"].endswith(
+        f":{project['project']['version']}"
+    )
+    assert "AECONTROL_RECOVERY_DRILL_CHECKPOINT_SECRET" in environment
+    assert "AECONTROL_RECOVERY_DRILL_REPORT_SECRET" in environment
+
+    assert "checkpoint-secret.example.yaml" not in kustomization["resources"]
+    assert "verifier-secret.example.yaml" not in kustomization["resources"]
+    assert "report-secret.example.yaml" not in kustomization["resources"]
+
+
 def test_cloudnative_pg_pitr_monitoring_alerts_on_failed_and_stale_backups() -> None:
     root = Path("deploy/overlays/cloudnative-pg-pitr-monitoring")
     kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
