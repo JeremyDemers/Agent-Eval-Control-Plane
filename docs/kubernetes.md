@@ -29,9 +29,15 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.45.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.46.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
+
+For remote signing, `deploy/overlays/vault-transit` removes the private-key map from API and worker
+pods, mounts an externally managed Vault token Secret read-only, and pins one Transit key version.
+Create `aecontrol-vault-token` through Vault Kubernetes auth, an external secret manager, or the
+excluded example only in an isolated environment; then patch the Vault address, CA trust, key, and
+version before applying the overlay. See [`vault-transit-signing.md`](vault-transit-signing.md).
 
 OIDC federation is configured on API pods with non-secret issuer metadata. Keep the static operator
 credential in the existing authentication Secret; federated tokens cannot replace bootstrap control:

@@ -28,6 +28,13 @@ from aecontrol.guardrails import (
     GuardrailEvidence,
     GuardrailsConfig,
 )
+from aecontrol.integrity import (
+    ED25519,
+    ED25519_PUBLIC_KEYS_ENV,
+    SIGNING_ALGORITHM_ENV,
+    SIGNING_KEY_ID_ENV,
+    generate_ed25519_keypair,
+)
 from aecontrol.models import (
     Accelerator,
     EvaluationJob,
@@ -44,6 +51,12 @@ from aecontrol.tenants import (
     TenantQuotaStatus,
     TenantQuotaUsage,
 )
+from aecontrol.vault import (
+    VAULT_ADDR_ENV,
+    VAULT_KEY_ENV,
+    VAULT_KEY_VERSION_ENV,
+    VAULT_TOKEN_ENV,
+)
 
 
 def test_doctor_reports_sanitized_telemetry_destination(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -58,6 +71,29 @@ def test_doctor_reports_sanitized_telemetry_destination(monkeypatch) -> None:  #
     assert "telemetry: otlp/http host=traces.example" in result.output
     assert "collector-user" not in result.output
     assert "collector-secret" not in result.output
+
+
+def test_doctor_reports_sanitized_vault_transit_signer(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _, public_key = generate_ed25519_keypair()
+    monkeypatch.setenv(SIGNING_KEY_ID_ENV, "vault-evidence-v4")
+    monkeypatch.setenv(SIGNING_ALGORITHM_ENV, ED25519)
+    monkeypatch.setenv(
+        ED25519_PUBLIC_KEYS_ENV,
+        json.dumps({"vault-evidence-v4": base64.b64encode(public_key).decode()}),
+    )
+    monkeypatch.setenv(VAULT_ADDR_ENV, "https://vault.internal.example")
+    monkeypatch.setenv(VAULT_TOKEN_ENV, "hvs.must-not-appear")
+    monkeypatch.setenv(VAULT_KEY_ENV, "sensitive-key-name")
+    monkeypatch.setenv(VAULT_KEY_VERSION_ENV, "4")
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "artifact signing: vault-transit host=vault.internal.example" in result.output
+    assert "mount=transit" in result.output
+    assert "key_version=4" in result.output
+    assert "hvs.must-not-appear" not in result.output
+    assert "sensitive-key-name" not in result.output
 
 
 def test_auth_federation_diagnostics_are_sanitized(monkeypatch) -> None:  # type: ignore[no-untyped-def]

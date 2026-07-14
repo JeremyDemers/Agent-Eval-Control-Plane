@@ -31,7 +31,7 @@ from aecontrol.federation import oidc_configuration_from_environment
 from aecontrol.gate import evaluate_gate, load_policy
 from aecontrol.guardrails import GuardrailsClient, GuardrailsError, guardrail_bundle_digest
 from aecontrol.hardware import detect_worker_capabilities
-from aecontrol.integrity import ED25519, HMAC_SHA256, generate_ed25519_keypair
+from aecontrol.integrity import ED25519, HMAC_SHA256, ArtifactKeyring, generate_ed25519_keypair
 from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, EvaluationRun, GateOutcome, JobStatus, RunComparison
 from aecontrol.nim import NIMClient
@@ -47,6 +47,7 @@ from aecontrol.telemetry import (
 )
 from aecontrol.tenancy import default_tenant_id
 from aecontrol.tenants import TenantQuotaLimits
+from aecontrol.vault import vault_configuration_from_environment
 
 app = typer.Typer(help="AgentEval Control Plane CLI")
 datasets_app = typer.Typer(help="Dataset commands")
@@ -116,6 +117,19 @@ def doctor() -> None:
             f"identity federation: enabled issuer={federation.issuer_host} "
             f"algorithms={','.join(federation.algorithms)}"
         )
+    keyring = ArtifactKeyring.from_environment()
+    vault = vault_configuration_from_environment()
+    if vault is not None:
+        console.print(
+            f"artifact signing: vault-transit host={vault.endpoint_host} "
+            f"mount={vault.mount} key_version={vault.key_version}"
+        )
+    elif keyring is not None and keyring.active_key_id is not None:
+        console.print(f"artifact signing: local {keyring.active_algorithm}")
+    elif keyring is not None:
+        console.print("artifact signing: public-verification-only")
+    else:
+        console.print("artifact signing: disabled")
     dcgm = dcgm_configuration_from_environment()
     dcgm_detail = (
         f"enabled host={dcgm.endpoint_host} timeout={dcgm.timeout_seconds:g}s pod={dcgm.pod_name}"
