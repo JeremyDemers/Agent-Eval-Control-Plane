@@ -12,4 +12,4 @@ patches:
   - path: workloads.yaml
 images:
   - name: ghcr.io/jeremydemers/agent-eval-control-plane
-    newTag: 0.52.0
+    newTag: 0.53.0

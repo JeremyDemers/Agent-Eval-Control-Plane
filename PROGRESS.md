@@ -28,6 +28,7 @@
 - Signed ledger checkpoints publish and read-verify across independent Object Lock destinations.
 - AWS KMS can sign evidence with non-exportable Ed25519 keys and offline verification.
 - Kata RuntimeClass Jobs provide one credential-free microVM boundary per candidate test.
+- Amazon Bedrock Converse provides a native hosted runtime with IRSA-ready worker placement.
 
 ## Implemented
 
@@ -108,6 +109,8 @@
 - Pinned AWS KMS Ed25519 signing with local response verification and an IRSA-ready overlay.
 - Per-test Kubernetes Job execution under a pinned Kata RuntimeClass, with deny-all networking,
   credential exclusion, hardened pod controls, bounded deadlines, and foreground cleanup.
+- Native Amazon Bedrock Converse runtime with forced schema-backed tool output, sanitized evidence,
+  model discovery, automatic worker labels, and a least-privilege IRSA deployment overlay.
 
 ## Verification
 
@@ -131,5 +134,5 @@
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
-- The browser remains local-trust. Additional hosted providers, other cloud KMS products, and
+- The browser remains local-trust. Additional provider adapters, other cloud KMS products, and
   dedicated HSM adapters remain on the roadmap.

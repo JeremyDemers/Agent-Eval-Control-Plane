@@ -53,8 +53,9 @@ Implemented ahead of the original four-day scope:
 - Independently verified multi-region S3 Object Lock checkpoint publication with durability policy
 - Pinned AWS KMS Ed25519 signing with workload identity and offline public-key verification
 - Per-test Kubernetes Jobs with pinned Kata RuntimeClass microVM isolation and deny-all networking
+- Native Amazon Bedrock Converse runtime with schema-backed tool output and IRSA worker placement
 
 Next stages:
 
-- Additional hosted provider authentication and endpoint-specific adapters
+- Additional provider-specific adapters beyond OpenAI-compatible, NVIDIA NIM, and Amazon Bedrock
 - Additional cloud KMS products and dedicated HSM signing adapters

@@ -9,6 +9,7 @@ from uuid import uuid4
 from typer.testing import CliRunner
 
 from aecontrol.aws_kms import AWS_KMS_KEY_ARN_ENV
+from aecontrol.bedrock import BedrockConfiguration, BedrockModel
 from aecontrol.checkpoints import (
     FileCheckpointSink,
     LedgerCheckpointPayload,
@@ -78,6 +79,34 @@ def test_doctor_reports_sanitized_telemetry_destination(monkeypatch) -> None:  #
     assert "telemetry: otlp/http host=traces.example" in result.output
     assert "collector-user" not in result.output
     assert "collector-secret" not in result.output
+
+
+def test_bedrock_cli_reports_region_and_models_without_profile(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    model = BedrockModel(
+        model_id="us.anthropic.claude-test-v1:0",
+        model_name="Claude Test",
+        provider_name="Anthropic",
+        input_modalities=["TEXT"],
+        output_modalities=["TEXT"],
+        inference_types=["ON_DEMAND"],
+        response_streaming_supported=True,
+    )
+
+    class Client:
+        configuration = BedrockConfiguration("us-east-2", "secret-profile", 30)
+
+        async def models(self):  # type: ignore[no-untyped-def]
+            return [model]
+
+    monkeypatch.setattr("aecontrol.cli.BedrockClient", Client)
+    doctor = CliRunner().invoke(app, ["bedrock", "doctor"])
+    assert doctor.exit_code == 0
+    assert "region=us-east-2, text_models=1" in doctor.output
+    assert "secret-profile" not in doctor.output
+
+    models = CliRunner().invoke(app, ["bedrock", "models", "--json"])
+    assert models.exit_code == 0
+    assert '"model_id": "us.anthropic.claude-test-v1:0"' in models.output
 
 
 def test_doctor_reports_sanitized_vault_transit_signer(monkeypatch) -> None:  # type: ignore[no-untyped-def]

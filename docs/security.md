@@ -115,6 +115,13 @@ uses short-lived workload credentials, and locally verifies each response before
 prevent a compromised authorized workload from requesting signatures. See
 [`aws-kms-signing.md`](aws-kms-signing.md).
 
+Amazon Bedrock inference uses the Boto3 credential provider chain and a distinct `aws-bedrock` worker
+label. The EKS overlay supplies short-lived web identity to a dedicated worker and scopes invocation
+to an explicit model ARN. Provider errors are replaced with stable messages before entering evidence;
+profile names, credentials, prompts, and raw AWS diagnostics are not persisted. A compromised worker
+can still invoke every model permitted by its IAM role and incur the corresponding cost. See
+[`aws-bedrock.md`](aws-bedrock.md).
+
 ## Repository Security
 
 `.github/workflows/security.yml` runs three independent controls:
@@ -124,7 +131,7 @@ prevent a compromised authorized workload from requesting signatures. See
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.52.0
+development-only tools so its result describes the shipped runtime environment. The v0.53.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults

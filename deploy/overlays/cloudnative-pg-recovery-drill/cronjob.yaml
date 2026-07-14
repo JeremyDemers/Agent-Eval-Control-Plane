@@ -30,13 +30,13 @@ spec:
               type: RuntimeDefault
           containers:
             - name: orchestrator
-              image: ghcr.io/jeremydemers/agent-eval-control-plane:0.52.0
+              image: ghcr.io/jeremydemers/agent-eval-control-plane:0.53.0
               imagePullPolicy: IfNotPresent
               command: [/app/.venv/bin/aecontrol]
               args: [recovery-drill, --json]
               env:
                 - name: AECONTROL_RECOVERY_DRILL_VERIFIER_IMAGE
-                  value: ghcr.io/jeremydemers/agent-eval-control-plane:0.52.0
+                  value: ghcr.io/jeremydemers/agent-eval-control-plane:0.53.0
                 - name: AECONTROL_RECOVERY_DRILL_CHECKPOINT_SECRET
                   value: aecontrol-recovery-checkpoints
                 - name: AECONTROL_RECOVERY_DRILL_VERIFIER_SECRET
