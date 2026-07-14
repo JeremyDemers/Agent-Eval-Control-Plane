@@ -795,7 +795,7 @@ def test_store_cli_publishes_create_only_checkpoint(tmp_path: Path, monkeypatch)
     assert "choose exactly one" in missing_destination.output
 
     monkeypatch.setattr(
-        "aecontrol.cli.S3ObjectLockCheckpointSink.from_environment",
+        "aecontrol.cli.checkpoint_sink_from_environment",
         lambda: FileCheckpointSink(tmp_path / "s3"),
     )
     s3_result = CliRunner().invoke(app, ["store", "checkpoint", "--s3", "--retention-days", "45"])

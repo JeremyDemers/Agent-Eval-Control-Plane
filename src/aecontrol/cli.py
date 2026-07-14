@@ -21,7 +21,7 @@ from rich.console import Console
 from aecontrol.agents import list_agent_versions
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key, load_auth_config
-from aecontrol.checkpoints import FileCheckpointSink, S3ObjectLockCheckpointSink
+from aecontrol.checkpoints import FileCheckpointSink, checkpoint_sink_from_environment
 from aecontrol.compare import compare_runs
 from aecontrol.database import database_configuration_from_environment
 from aecontrol.datasets import validate_jsonl_dataset
@@ -538,7 +538,7 @@ def store_checkpoint(
     try:
         checkpoint = ArtifactStore(database_url).create_ledger_checkpoint(retention_days)
         if s3:
-            sink = S3ObjectLockCheckpointSink.from_environment()
+            sink = checkpoint_sink_from_environment()
             if sink is None:
                 raise ValueError("AECONTROL_CHECKPOINT_S3_BUCKET is required with --s3")
             publication = sink.publish(checkpoint)
@@ -555,6 +555,14 @@ def store_checkpoint(
         f"sequence={checkpoint.payload.ledger_sequence} head={checkpoint.payload.ledger_head_sha256}"
     )
     console.print(f"published: {publication.destination}")
+    if publication.copies:
+        copy_names = ",".join(copy.destination_id for copy in publication.copies)
+        console.print(
+            f"verified copies: {len(publication.copies)}/{publication.required_copies} "
+            f"destinations={copy_names}"
+        )
+    if publication.failed_destinations:
+        console.print(f"failed destinations: {','.join(publication.failed_destinations)}")
 
 
 @store_app.command("verify-recovery")

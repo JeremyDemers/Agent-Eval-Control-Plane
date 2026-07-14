@@ -50,9 +50,10 @@ Implemented ahead of the original four-day scope:
 - Version-pinned Vault Transit Ed25519 signing with offline public-key verification
 - Scheduled CloudNativePG restore drills with immutable report archival and bounded cleanup
 - Cross-region CloudNativePG distributed topology with guarded, token-bound replica promotion
+- Independently verified multi-region S3 Object Lock checkpoint publication with durability policy
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
 - Additional hosted provider authentication and endpoint-specific adapters
-- Cross-region evidence replication and direct cloud KMS/HSM signing adapters
+- Direct cloud KMS/HSM signing adapters

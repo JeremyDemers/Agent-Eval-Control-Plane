@@ -26,8 +26,8 @@ from aecontrol.checkpoints import (
     CheckpointPublication,
     CheckpointPublicationError,
     CheckpointSink,
-    S3ObjectLockCheckpointSink,
     SignedLedgerCheckpoint,
+    checkpoint_sink_from_environment,
 )
 from aecontrol.compare import compare_runs
 from aecontrol.database import (
@@ -196,7 +196,7 @@ def create_app(
         database_config=database_config or database_configuration_from_environment(),
     )
     guardrails = guardrails_client or GuardrailsClient()
-    resolved_checkpoint_sink = checkpoint_sink or S3ObjectLockCheckpointSink.from_environment()
+    resolved_checkpoint_sink = checkpoint_sink or checkpoint_sink_from_environment()
     authenticator = Authenticator(
         auth_config,
         credential_lookup=store.resolve_tenant_api_key,
