@@ -271,7 +271,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.51.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.52.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -283,17 +283,21 @@ The default process sandbox enforces source-size, syntax, import/call, wall-cloc
 file-size, descriptor, process-count, output, and environment limits. A rootless Podman backend adds a
 read-only workspace, disabled networking, dropped Linux capabilities, `no-new-privileges`, an
 unprivileged UID, container CPU/memory/PID limits, digest enforcement, and optional custom
-seccomp/AppArmor policies.
+seccomp/AppArmor policies. The production Kubernetes backend creates one deny-networked,
+tokenless Job per test under a pinned Kata RuntimeClass, giving hostile candidate code a separate
+guest kernel while keeping model, database, and signing credentials in the controller.
 
 ```bash
 make sandbox-demo
 AECONTROL_SANDBOX_BACKEND=podman uv run aecontrol doctor
+# In a Kata-enabled cluster:
+AECONTROL_SANDBOX_BACKEND=kubernetes-runtimeclass uv run aecontrol doctor
 ```
 
 `make sandbox-demo` resolves the cached Python image to its immutable repository digest and runs all
 four slices with `AECONTROL_SANDBOX_REQUIRE_DIGEST=true`. Every evaluation records `sandbox_backend`
-provenance. See [`docs/security.md`](docs/security.md) for production configuration, kernel-policy
-controls, and the remaining VM isolation boundary.
+provenance. See [`docs/security.md`](docs/security.md) for local/container controls and
+[`docs/kata-sandbox.md`](docs/kata-sandbox.md) for per-test microVM deployment and trust boundaries.
 
 CodeQL, pull-request dependency review, and a weekly `uv.lock`-derived vulnerability audit run in
 GitHub Actions. The local equivalent is:
@@ -520,8 +524,9 @@ mixed-algorithm rotation, and threat-model limits.
 ## Current Limitations
 
 The browser explorer is intentionally local-trust for this portfolio phase. The default process
-backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
-the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
+backend is not hardened isolation for untrusted code, while Podman still shares the host kernel;
+actively hostile candidates require the optional, externally operated Kata backend. The project
+consumes but does not install or reconfigure Kata Containers, NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Cross-region
 provider-native object replication and fencing outside Kubernetes remain platform-owned controls;
 automatic multi-writer operation is intentionally unsupported. Additional hosted providers, other

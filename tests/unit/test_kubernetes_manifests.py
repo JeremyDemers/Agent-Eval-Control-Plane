@@ -214,6 +214,63 @@ def test_aws_kms_overlay_uses_workload_identity_without_private_keys() -> None:
     assert kustomization["images"][0]["newTag"] == project["project"]["version"]
 
 
+def test_kata_sandbox_overlay_has_least_privilege_and_fail_closed_workloads() -> None:
+    root = Path("deploy/overlays/kata-sandbox")
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    assert "runtime-class.example.yaml" not in kustomization["resources"]
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+
+    service_account = yaml.safe_load((root / "service-account.yaml").read_text())
+    assert service_account["metadata"]["name"] == "aecontrol-sandbox-controller"
+    assert service_account["automountServiceAccountToken"] is True
+
+    role = yaml.safe_load((root / "role.yaml").read_text())
+    permissions = {
+        (tuple(rule["apiGroups"]), tuple(rule["resources"])): set(rule["verbs"])
+        for rule in role["rules"]
+    }
+    assert permissions[(("",), ("configmaps",))] == {"create", "delete"}
+    assert permissions[(("",), ("pods",))] == {"get", "list"}
+    assert permissions[(("",), ("pods/log",))] == {"get"}
+    assert permissions[(("batch",), ("jobs",))] == {"create", "get", "list", "delete"}
+    assert permissions[(("networking.k8s.io",), ("networkpolicies",))] == {
+        "create",
+        "delete",
+    }
+    assert all("secrets" not in rule["resources"] for rule in role["rules"])
+
+    runtime_reader = yaml.safe_load((root / "runtime-class-reader.yaml").read_text())
+    assert runtime_reader["rules"] == [
+        {
+            "apiGroups": ["node.k8s.io"],
+            "resources": ["runtimeclasses"],
+            "resourceNames": ["kata-qemu"],
+            "verbs": ["get"],
+        }
+    ]
+    runtime_class = yaml.safe_load((root / "runtime-class.example.yaml").read_text())
+    assert runtime_class["handler"] == "kata-qemu"
+    assert runtime_class["scheduling"]["nodeSelector"] == {"katacontainers.io/kata-runtime": "true"}
+
+    patches = list(yaml.safe_load_all((root / "workloads.yaml").read_text()))
+    assert {patch["metadata"]["name"] for patch in patches} == {
+        "api",
+        "cpu-worker",
+        "gpu-worker",
+    }
+    for patch in patches:
+        pod = patch["spec"]["template"]["spec"]
+        assert pod["serviceAccountName"] == "aecontrol-sandbox-controller"
+        environment = {item["name"]: item for item in pod["containers"][0]["env"]}
+        assert environment["AECONTROL_SANDBOX_BACKEND"]["value"] == ("kubernetes-runtimeclass")
+        assert environment["AECONTROL_SANDBOX_KUBERNETES_RUNTIME_CLASS"]["value"] == ("kata-qemu")
+        assert environment["AECONTROL_SANDBOX_KUBERNETES_RUNTIME_HANDLER"]["value"] == ("kata-qemu")
+        assert (
+            "@sha256:REPLACE_WITH_64_HEX_DIGEST" in environment["AECONTROL_SANDBOX_IMAGE"]["value"]
+        )
+
+
 def test_cloudnative_pg_overlay_replaces_development_database_with_quorum_cluster() -> None:
     root = Path("deploy/overlays/cloudnative-pg")
     cluster = yaml.safe_load((root / "cluster.yaml").read_text())

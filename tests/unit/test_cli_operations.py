@@ -36,6 +36,12 @@ from aecontrol.integrity import (
     SIGNING_KEY_ID_ENV,
     generate_ed25519_keypair,
 )
+from aecontrol.kubernetes_sandbox import (
+    KUBERNETES_NAMESPACE_ENV,
+    KUBERNETES_RUNTIME_CLASS_ENV,
+    KUBERNETES_RUNTIME_HANDLER_ENV,
+    SANDBOX_IMAGE_ENV,
+)
 from aecontrol.models import (
     Accelerator,
     EvaluationJob,
@@ -271,6 +277,21 @@ def test_doctor_reports_hardened_podman_configuration(monkeypatch) -> None:  # t
     assert "sandbox image: digest-pinned (pinning required)" in result.output
     assert "seccomp=runtime-default" in result.output
     assert "apparmor=aecontrol-sandbox" in result.output
+
+
+def test_doctor_reports_pinned_kubernetes_runtimeclass_sandbox(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("AECONTROL_SANDBOX_BACKEND", "kubernetes-runtimeclass")
+    monkeypatch.setenv(KUBERNETES_NAMESPACE_ENV, "isolated-evals")
+    monkeypatch.setenv(KUBERNETES_RUNTIME_CLASS_ENV, "kata-qemu")
+    monkeypatch.setenv(KUBERNETES_RUNTIME_HANDLER_ENV, "kata-qemu")
+    monkeypatch.setenv(SANDBOX_IMAGE_ENV, "registry.example/python@sha256:" + "a" * 64)
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "sandbox: kubernetes-runtimeclass" in result.output
+    assert "sandbox runtime: class=kata-qemu handler=kata-qemu" in result.output
+    assert "sandbox image: digest-pinned namespace=isolated-evals" in result.output
 
 
 def test_doctor_reports_bounded_database_pool(monkeypatch) -> None:  # type: ignore[no-untyped-def]

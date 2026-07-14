@@ -50,6 +50,7 @@ from aecontrol.guardrails import (
     StoredGuardrailEvidenceSummary,
 )
 from aecontrol.integrity import ArtifactKeyring, ArtifactSigningError, ArtifactVerificationError
+from aecontrol.kubernetes_sandbox import KubernetesSandboxError
 from aecontrol.models import (
     MIG_PROFILE_PATTERN,
     Accelerator,
@@ -238,6 +239,15 @@ def create_app(
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": "artifact signing service is unavailable"},
+        )
+
+    @application.exception_handler(KubernetesSandboxError)
+    async def sandbox_execution_unavailable(
+        _request: Request, _error: KubernetesSandboxError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "sandbox execution service is unavailable"},
         )
 
     @application.middleware("http")

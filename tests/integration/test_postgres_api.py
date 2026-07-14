@@ -23,6 +23,13 @@ from aecontrol.federation import FederatedIdentity, FederationError
 from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig, GuardrailsError
 from aecontrol.integrity import ED25519, HMAC_SHA256, ArtifactKeyring, generate_ed25519_keypair
 from aecontrol.jobs import EvaluationWorker
+from aecontrol.kubernetes_sandbox import (
+    KUBERNETES_NAMESPACE_ENV,
+    KUBERNETES_RUNTIME_CLASS_ENV,
+    KUBERNETES_RUNTIME_HANDLER_ENV,
+    SANDBOX_IMAGE_ENV,
+    KubernetesSandboxError,
+)
 from aecontrol.models import Accelerator, GpuDevice, JobStatus, WorkerCapabilities
 from aecontrol.store import ArtifactStore
 from aecontrol.tenancy import bind_tenant, reset_tenant
@@ -1503,6 +1510,45 @@ def test_remote_signing_failure_returns_sanitized_service_unavailable(
             )
             assert response.status_code == 503
             assert response.json() == {"detail": "artifact signing service is unavailable"}
+            assert client.get("/api/v1/runs").json() == []
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
+def test_kubernetes_sandbox_failure_returns_sanitized_service_unavailable(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schema = f"test_{uuid4().hex}"
+    monkeypatch.setenv("AECONTROL_SANDBOX_BACKEND", "kubernetes-runtimeclass")
+    monkeypatch.setenv(KUBERNETES_NAMESPACE_ENV, "aecontrol")
+    monkeypatch.setenv(KUBERNETES_RUNTIME_CLASS_ENV, "kata-qemu")
+    monkeypatch.setenv(KUBERNETES_RUNTIME_HANDLER_ENV, "kata-qemu")
+    monkeypatch.setenv(SANDBOX_IMAGE_ENV, "registry.example/python@sha256:" + "a" * 64)
+
+    def unavailable():  # type: ignore[no-untyped-def]
+        raise KubernetesSandboxError(
+            "cluster response contained https://token@sensitive-api.example"
+        )
+
+    monkeypatch.setattr(
+        "aecontrol.kubernetes_sandbox.OfficialKubernetesSandboxAPI.from_in_cluster",
+        unavailable,
+    )
+    try:
+        with TestClient(create_app(database_url, schema=schema)) as client:
+            response = client.post(
+                "/api/v1/evaluations",
+                json={
+                    "suite_path": "examples/suites/coding_repair.yaml",
+                    "agent_version": "baseline",
+                },
+            )
+            assert response.status_code == 503
+            assert response.json() == {"detail": "sandbox execution service is unavailable"}
+            assert "sensitive-api" not in response.text
             assert client.get("/api/v1/runs").json() == []
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
