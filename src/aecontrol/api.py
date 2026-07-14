@@ -36,6 +36,7 @@ from aecontrol.database import (
 )
 from aecontrol.engine import EvaluationEngine, load_suite
 from aecontrol.federation import FederatedTokenVerifier
+from aecontrol.fleet import PlatformFleetReport
 from aecontrol.gate import evaluate_gate, load_policy
 from aecontrol.guardrails import (
     ExpectedGuardrailAction,
@@ -387,6 +388,17 @@ def create_app(
         _principal: Principal = Depends(require_operator),
     ) -> list[TenantRecord]:
         return await asyncio.to_thread(store.list_tenants)
+
+    @application.get(
+        "/api/v1/platform/fleet",
+        response_model=PlatformFleetReport,
+        tags=["platform"],
+    )
+    async def platform_fleet(
+        active_worker_window_seconds: int = Query(default=120, ge=30, le=3600),
+        _principal: Principal = Depends(require_operator),
+    ) -> PlatformFleetReport:
+        return await asyncio.to_thread(store.platform_fleet_report, active_worker_window_seconds)
 
     @application.post(
         "/api/v1/platform/tenants",

@@ -266,7 +266,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.44.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.45.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -432,6 +432,11 @@ bound queued jobs, rolling hourly submissions, active execution leases, and CUDA
 tenants can inspect their own policy and live usage. PostgreSQL advisory locks serialize admission
 per tenant without blocking unrelated tenants, and quota failures return structured HTTP 429 detail.
 
+Schema v18 adds privacy-bounded fleet analytics for the static platform operator. Transactional
+PostgreSQL rollups expose per-tenant and total CPU/CUDA queue pressure, active leases, fresh workers,
+advertised GPU counts, lifecycle state, and quota saturation without returning suite paths, model
+versions, labels, worker/GPU identities, telemetry, or evaluation evidence.
+
 ```bash
 uv run aecontrol auth hash-key
 uv run aecontrol auth validate auth.yaml
@@ -445,6 +450,8 @@ See [`docs/tenant-quotas.md`](docs/tenant-quotas.md) for policy semantics, REST,
 concurrency guarantees.
 See [`docs/identity-federation.md`](docs/identity-federation.md) for the JWT claim contract, JWKS
 rotation, deployment settings, and revocation boundary.
+See [`docs/fleet-analytics.md`](docs/fleet-analytics.md) for rollup consistency, the disclosure model,
+REST, CLI, SDK, and database-owner trust boundary.
 
 ## Asymmetric Artifact Attestations
 
@@ -484,8 +491,8 @@ The browser explorer is intentionally local-trust for this portfolio phase. The 
 backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Automated
-restore drills, cross-region promotion, additional hosted providers, remote KMS signing, and
-cross-tenant fleet analytics remain in `docs/roadmap.md`.
+restore drills, cross-region promotion, additional hosted providers, and remote KMS signing remain in
+`docs/roadmap.md`.
 
 ## Project Governance
 

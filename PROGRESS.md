@@ -95,6 +95,8 @@
   atomic multi-replica enforcement and tenant-visible usage.
 - OIDC JWT federation with mandatory issuer/audience/expiry checks, bounded JWKS caching, namespaced
   tenant scopes, pseudonymous audit attribution, and static-only platform operator authority.
+- Privacy-bounded cross-tenant fleet analytics with transactional scheduling rollups, operator-only
+  REST/CLI/SDK access, live quota saturation, and sensitive-field exclusion tests.
 
 ## Verification
 

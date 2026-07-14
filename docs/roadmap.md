@@ -46,6 +46,7 @@ Implemented ahead of the original four-day scope:
 - Ed25519 ledger checkpoints with S3 Object Lock compliance retention and rollback detection
 - Atomic per-tenant queue, submission-rate, execution, and CUDA concurrency quotas
 - OIDC JWT federation with bounded JWKS rotation and tenant/scope claim enforcement
+- Privacy-bounded cross-tenant CPU/CUDA fleet analytics with transactional PostgreSQL rollups
 
 Next stages:
 

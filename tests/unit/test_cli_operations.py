@@ -14,6 +14,12 @@ from aecontrol.checkpoints import (
     SignedLedgerCheckpoint,
 )
 from aecontrol.cli import _parse_labels, app
+from aecontrol.fleet import (
+    FleetQuotaSaturation,
+    FleetResourceSnapshot,
+    PlatformFleetReport,
+    TenantFleetSummary,
+)
 from aecontrol.guardrails import (
     GuardrailConfigActivation,
     GuardrailConfigVersion,
@@ -33,6 +39,7 @@ from aecontrol.models import (
 )
 from aecontrol.openai_compatible import CompatibleModel
 from aecontrol.tenants import (
+    TenantQuotaLimits,
     TenantQuotaRecord,
     TenantQuotaStatus,
     TenantQuotaUsage,
@@ -136,6 +143,59 @@ def test_tenant_quota_cli_sets_policy_and_reports_usage(monkeypatch) -> None:  #
     status = CliRunner().invoke(app, ["tenant", "quota-status"])
     assert status.exit_code == 0
     assert "queued=3/12 hourly=9/60 running=2/4 cuda=1/2" in status.output
+
+
+def test_platform_fleet_cli_renders_human_and_json_reports(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    resources = FleetResourceSnapshot(
+        queued_cpu_jobs=1,
+        queued_cuda_jobs=2,
+        active_running_cpu_jobs=0,
+        active_running_cuda_jobs=1,
+        jobs_submitted_last_hour=3,
+        workers_observed=1,
+        active_cpu_workers=1,
+        active_cuda_workers=1,
+        active_gpu_devices=4,
+        oldest_queued_seconds=12,
+    )
+    report = PlatformFleetReport(
+        observed_at=datetime.now(UTC),
+        active_worker_window_seconds=120,
+        totals=resources,
+        tenants=[
+            TenantFleetSummary(
+                tenant_id="research",
+                display_name="Research",
+                status="active",
+                quota=TenantQuotaLimits(max_queued_jobs=3),
+                saturation=FleetQuotaSaturation(
+                    queued_jobs=True,
+                    jobs_per_hour=False,
+                    running_jobs=False,
+                    running_cuda_jobs=False,
+                ),
+                **resources.model_dump(),
+            )
+        ],
+    )
+
+    class Store:
+        def __init__(self, _database_url: str) -> None:
+            pass
+
+        def platform_fleet_report(self, active_worker_window_seconds: int):  # type: ignore[no-untyped-def]
+            assert active_worker_window_seconds == 120
+            return report
+
+    monkeypatch.setattr("aecontrol.cli.ArtifactStore", Store)
+    human = CliRunner().invoke(app, ["platform", "fleet"])
+    payload = CliRunner().invoke(app, ["platform", "fleet", "--json"])
+
+    assert human.exit_code == 0
+    assert "queued_cpu=1 queued_cuda=2" in human.output
+    assert "research status=active queue=3 running=1 cuda_workers=1 gpus=4" in human.output
+    assert payload.exit_code == 0
+    assert json.loads(payload.output)["totals"]["active_gpu_devices"] == 4
 
 
 def test_doctor_reports_hardened_podman_configuration(monkeypatch) -> None:  # type: ignore[no-untyped-def]

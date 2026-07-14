@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from aecontrol.checkpoints import CheckpointPublication, SignedLedgerCheckpoint
+from aecontrol.fleet import PlatformFleetReport
 from aecontrol.guardrails import (
     ExpectedGuardrailAction,
     GuardrailConfigActivation,
@@ -152,6 +153,12 @@ class AgentEvalClient:
     def tenants(self) -> list[TenantRecord]:
         payload = self.transport.request("GET", "/api/v1/platform/tenants")
         return [TenantRecord.model_validate(item) for item in _list(payload)]
+
+    def platform_fleet(self, active_worker_window_seconds: int = 120) -> PlatformFleetReport:
+        query = urlencode({"active_worker_window_seconds": active_worker_window_seconds})
+        return PlatformFleetReport.model_validate(
+            self.transport.request("GET", f"/api/v1/platform/fleet?{query}")
+        )
 
     def create_tenant(
         self, tenant_id: str, display_name: str, initial_key_id: str = "tenant-admin"
@@ -449,6 +456,9 @@ class AsyncAgentEvalClient:
 
     async def tenants(self) -> list[TenantRecord]:
         return await asyncio.to_thread(self._sync.tenants)
+
+    async def platform_fleet(self, active_worker_window_seconds: int = 120) -> PlatformFleetReport:
+        return await asyncio.to_thread(self._sync.platform_fleet, active_worker_window_seconds)
 
     async def create_tenant(
         self, tenant_id: str, display_name: str, initial_key_id: str = "tenant-admin"

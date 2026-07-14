@@ -44,6 +44,11 @@ The application database role must not be a PostgreSQL superuser and must not ha
 `FORCE ROW LEVEL SECURITY` covers the normal table owner, but PostgreSQL superusers always bypass RLS.
 Database credentials are therefore an operator trust boundary and must never be issued to API tenants.
 
+Schema v18's platform fleet endpoint does not bypass RLS to inspect workload tables. Transactional
+triggers maintain minimal non-RLS scheduling rollups, and the operator query selects only aggregate
+resource state from those rollups. Tenant admins cannot call the endpoint. The database owner can read
+the internal rollup keys and remains trusted; see [`fleet-analytics.md`](fleet-analytics.md).
+
 ## Workers And Scaling
 
 CLI and worker processes bind `AECONTROL_TENANT_ID`, defaulting to `default`. A worker can claim only
