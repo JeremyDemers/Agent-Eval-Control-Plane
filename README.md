@@ -266,7 +266,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.43.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.44.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -422,6 +422,11 @@ isolated bootstrap `operator` scope, atomic tenant provisioning, one-time dynami
 tenant-admin rotation, revocation history, and fail-closed suspension without granting the platform
 operator access to tenant evidence.
 
+OIDC federation accepts issuer-signed JWT access tokens with mandatory issuer, audience, expiry,
+tenant, and namespaced AgentEval scope validation. JWKS retrieval is bounded and cached, subjects are
+pseudonymized in audit fields, tenant suspension remains immediate, and federated tokens can never
+receive the isolated platform `operator` scope.
+
 Schema v17 adds atomic tenant resource governance across replicated APIs and workers. Operators can
 bound queued jobs, rolling hourly submissions, active execution leases, and CUDA-specific leases;
 tenants can inspect their own policy and live usage. PostgreSQL advisory locks serialize admission
@@ -438,6 +443,8 @@ See [`docs/authentication.md`](docs/authentication.md) for configuration and rot
 concurrency invariants, backward compatibility, and credential-registry trust boundary.
 See [`docs/tenant-quotas.md`](docs/tenant-quotas.md) for policy semantics, REST, CLI, SDK, and
 concurrency guarantees.
+See [`docs/identity-federation.md`](docs/identity-federation.md) for the JWT claim contract, JWKS
+rotation, deployment settings, and revocation boundary.
 
 ## Asymmetric Artifact Attestations
 
@@ -477,8 +484,8 @@ The browser explorer is intentionally local-trust for this portfolio phase. The 
 backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Automated
-restore drills, cross-region promotion, additional hosted providers, remote KMS signing, identity
-federation, and cross-tenant fleet analytics remain in `docs/roadmap.md`.
+restore drills, cross-region promotion, additional hosted providers, remote KMS signing, and
+cross-tenant fleet analytics remain in `docs/roadmap.md`.
 
 ## Project Governance
 

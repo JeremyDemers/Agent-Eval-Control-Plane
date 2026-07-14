@@ -1,7 +1,8 @@
 # API Authentication
 
-AgentEval supports optional scoped bearer keys for `/api/v1` endpoints. Authentication is disabled
-for the zero-configuration local demo and enabled when `AECONTROL_AUTH_CONFIG` points to a YAML file.
+AgentEval supports optional scoped bearer keys and federated JWTs for `/api/v1` endpoints.
+Authentication is disabled for the zero-configuration local demo and enabled when
+`AECONTROL_AUTH_CONFIG` points to a YAML file or complete OIDC environment configuration is present.
 Health, readiness, API documentation, and the local browser explorer remain public so operators can
 diagnose the service and inspect the portfolio demo.
 
@@ -63,3 +64,11 @@ created and revoked by that tenant's `admin` credentials. Dynamic digests are st
 they are never returned, logged, or loaded into the static configuration. The final active admin key
 cannot be revoked. See [`tenant-lifecycle.md`](tenant-lifecycle.md) for endpoints, SDK methods,
 suspension behavior, and rotation examples.
+
+## OIDC federation
+
+Signed JWT access tokens can coexist with static and dynamic API keys. Federation requires explicit
+issuer, audience, and JWKS configuration; maps only namespaced tenant scopes; and never grants the
+bootstrap `operator` permission. SDK clients pass the access token through the existing `api_key`
+argument or `AECONTROL_API_KEY`. See [`identity-federation.md`](identity-federation.md) for the claim
+contract, bounded key caching, diagnostics, rotation, and revocation behavior.

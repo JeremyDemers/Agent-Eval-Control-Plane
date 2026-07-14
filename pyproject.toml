@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aecontrol"
-version = "0.43.0"
+version = "0.44.0"
 description = "AgentEval Control Plane: deterministic agent evaluation and release gates."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -34,6 +34,7 @@ dependencies = [
   "rich>=13.7,<14",
   "uvicorn>=0.30,<1",
   "pyyaml>=6.0,<7",
+  "pyjwt[crypto]>=2.10,<3",
 ]
 
 [project.optional-dependencies]
