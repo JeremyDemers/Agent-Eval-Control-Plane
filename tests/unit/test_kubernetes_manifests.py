@@ -154,6 +154,37 @@ def test_mig_overlay_consumes_profile_resources_and_advertises_them() -> None:
     assert kustomization["images"][0]["newTag"] == project["project"]["version"]
 
 
+def test_vault_transit_overlay_removes_private_keys_and_mounts_token_read_only() -> None:
+    root = Path("deploy/overlays/vault-transit")
+    patches = list(yaml.safe_load_all((root / "workloads.yaml").read_text()))
+    assert {item["metadata"]["name"] for item in patches} == {
+        "api",
+        "cpu-worker",
+        "gpu-worker",
+    }
+    for patch in patches:
+        pod = patch["spec"]["template"]["spec"]
+        assert pod["securityContext"]["fsGroup"] == 10001
+        assert pod["volumes"][0]["secret"]["defaultMode"] == 0o440
+        container = pod["containers"][0]
+        env = {item["name"]: item for item in container["env"]}
+        assert env["AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS"]["$patch"] == "delete"
+        assert env["AECONTROL_ARTIFACT_VAULT_ADDR"]["value"].startswith("https://")
+        assert env["AECONTROL_ARTIFACT_VAULT_TOKEN_FILE"]["value"].endswith("/token")
+        assert env["AECONTROL_ARTIFACT_VAULT_KEY_VERSION"]["value"] == "1"
+        assert container["volumeMounts"] == [
+            {
+                "name": "vault-token",
+                "mountPath": "/var/run/secrets/aecontrol-vault",
+                "readOnly": True,
+            }
+        ]
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    assert "token-secret.example.yaml" not in kustomization["resources"]
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+
+
 def test_cloudnative_pg_overlay_replaces_development_database_with_quorum_cluster() -> None:
     root = Path("deploy/overlays/cloudnative-pg")
     cluster = yaml.safe_load((root / "cluster.yaml").read_text())

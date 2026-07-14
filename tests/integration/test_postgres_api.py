@@ -6,13 +6,14 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+from psycopg.rows import dict_row
 
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key
@@ -25,6 +26,7 @@ from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, GpuDevice, JobStatus, WorkerCapabilities
 from aecontrol.store import ArtifactStore
 from aecontrol.tenancy import bind_tenant, reset_tenant
+from aecontrol.vault import VaultTransitError
 
 
 @pytest.fixture
@@ -1386,6 +1388,122 @@ def test_signed_ledger_checkpoint_is_persisted_published_and_append_only(
             connection.execute(
                 sql.SQL("DELETE FROM {}.ledger_checkpoints").format(sql.Identifier(schema))
             )
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
+def test_remote_ed25519_signer_covers_evidence_and_checkpoints(database_url: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    schema = f"test_{uuid4().hex}"
+    private_key, public_key = generate_ed25519_keypair()
+
+    class RemoteSigner:
+        algorithm = ED25519
+        key_id = "vault-evidence-v9"
+
+        def __init__(self) -> None:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+            self.private_key = Ed25519PrivateKey.from_private_bytes(private_key)
+            self.calls = 0
+
+        def sign(self, message: bytes) -> str:
+            self.calls += 1
+            return base64.b64encode(self.private_key.sign(message)).decode()
+
+    remote = RemoteSigner()
+    keyring = ArtifactKeyring(
+        active_key_id=remote.key_id,
+        active_algorithm=ED25519,
+        ed25519_public_keys={remote.key_id: public_key},
+        remote_signer=remote,
+    )
+    verifier = ArtifactKeyring(ed25519_public_keys={remote.key_id: public_key})
+    try:
+        with TestClient(
+            create_app(
+                database_url,
+                schema=schema,
+                artifact_keyring=keyring,
+                checkpoint_sink=FileCheckpointSink(tmp_path / "remote-checkpoints"),
+            )
+        ) as client:
+            evaluated = client.post(
+                "/api/v1/evaluations",
+                json={
+                    "suite_path": "examples/suites/coding_repair.yaml",
+                    "agent_version": "baseline",
+                },
+            )
+            assert evaluated.status_code == 201
+            run_id = evaluated.json()["run_id"]
+            published = client.post("/api/v1/integrity/checkpoints", json={"retention_days": 30})
+            assert published.status_code == 201
+            checkpoint = SignedLedgerCheckpoint.model_validate(published.json()["checkpoint"])
+            assert verify_checkpoint(checkpoint, verifier)
+            assert client.get("/api/v1/integrity").json()["valid"] == 1
+            assert remote.calls == 2
+
+        with psycopg.connect(database_url, row_factory=dict_row) as connection:
+            row = connection.execute(
+                sql.SQL(
+                    "SELECT payload_sha256, signature_value FROM {}.evaluation_runs "
+                    "WHERE run_id = %s"
+                ).format(sql.Identifier(schema)),
+                (run_id,),
+            ).fetchone()
+        assert row is not None
+        assert verifier.verify(
+            ED25519,
+            remote.key_id,
+            "run",
+            UUID(run_id),
+            str(row["payload_sha256"]),
+            str(row["signature_value"]),
+        )
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
+def test_remote_signing_failure_returns_sanitized_service_unavailable(
+    database_url: str,
+) -> None:
+    schema = f"test_{uuid4().hex}"
+    _, public_key = generate_ed25519_keypair()
+
+    class FailedSigner:
+        algorithm = ED25519
+        key_id = "vault-evidence-v1"
+
+        @staticmethod
+        def sign(_message: bytes) -> str:
+            raise VaultTransitError("upstream response contained hvs.sensitive-token")
+
+    keyring = ArtifactKeyring(
+        active_key_id=FailedSigner.key_id,
+        active_algorithm=ED25519,
+        ed25519_public_keys={FailedSigner.key_id: public_key},
+        remote_signer=FailedSigner(),
+    )
+    try:
+        with TestClient(
+            create_app(database_url, schema=schema, artifact_keyring=keyring)
+        ) as client:
+            response = client.post(
+                "/api/v1/evaluations",
+                json={
+                    "suite_path": "examples/suites/coding_repair.yaml",
+                    "agent_version": "baseline",
+                },
+            )
+            assert response.status_code == 503
+            assert response.json() == {"detail": "artifact signing service is unavailable"}
+            assert client.get("/api/v1/runs").json() == []
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(

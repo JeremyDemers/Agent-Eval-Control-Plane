@@ -58,6 +58,10 @@ Schema v16 checkpoints require an active Ed25519 private key and publish public-
 heads to create-only filesystem or S3 Object Lock sinks. See
 [`evidence-checkpoints.md`](evidence-checkpoints.md).
 
+The active private key can instead remain inside Vault Transit. AgentEval pins the Vault key version,
+stores the same base64 Ed25519 envelope, and continues to verify locally using public keys. See
+[`vault-transit-signing.md`](vault-transit-signing.md).
+
 ## Rotation and HMAC Compatibility
 
 1. Retain every public key referenced by stored Ed25519 evidence.
@@ -80,7 +84,7 @@ version, artifact type, UUID, and digest, preventing a valid signature from bein
 record. Ed25519 lets auditors verify with non-secret material and prevents a compromised audit process
 or PostgreSQL writer from forging evidence.
 
-An attacker who compromises an active API or worker private key can still forge signatures. Database
-rows are not retention locked, and local private-key loading is not hardware-backed custody.
-Production systems requiring stronger separation should use a remote KMS/HSM signing adapter and
-export signed envelopes to versioned, retention-locked object storage.
+An attacker who compromises an active local private key can still forge signatures. Vault Transit
+removes that key from AgentEval, but a compromised workload can use its token to request signatures
+until the token is revoked. Database rows are not retention locked. Export signed envelopes to
+versioned, retention-locked object storage; direct cloud KMS/HSM adapters remain future work.

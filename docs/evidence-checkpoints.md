@@ -79,7 +79,8 @@ and object key.
 The feature does not create or configure buckets, IAM roles, lifecycle rules, replication, or legal
 holds. Operators must alert on publication failures, protect the Ed25519 private key, independently
 retain public keys, and choose a retention period consistent with policy. Cross-region replication and
-remote KMS/HSM signing remain separate hardening stages.
+direct cloud KMS/HSM signing remains a separate hardening stage. Vault Transit remote Ed25519 signing
+is available through [`vault-transit-signing.md`](vault-transit-signing.md).
 
 For scheduled publication, run the `--s3` form from a Kubernetes CronJob or systemd timer with the
 same database tenant, Ed25519 signer, bucket variables, and workload identity as the API. The command

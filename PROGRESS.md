@@ -97,6 +97,8 @@
   tenant scopes, pseudonymous audit attribution, and static-only platform operator authority.
 - Privacy-bounded cross-tenant fleet analytics with transactional scheduling rollups, operator-only
   REST/CLI/SDK access, live quota saturation, and sensitive-field exclusion tests.
+- Version-pinned Vault Transit Ed25519 signing with no local private key, public-only verification,
+  sanitized fail-closed API behavior, and a non-root Kubernetes token-file overlay.
 
 ## Verification
 
@@ -120,5 +122,5 @@
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
-- VM-grade worker isolation, automated restore drills, remote KMS signing, cross-region evidence
+- VM-grade worker isolation, automated restore drills, direct cloud KMS/HSM signing, cross-region evidence
   replication, and additional hosted providers remain on the roadmap.

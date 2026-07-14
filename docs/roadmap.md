@@ -47,10 +47,11 @@ Implemented ahead of the original four-day scope:
 - Atomic per-tenant queue, submission-rate, execution, and CUDA concurrency quotas
 - OIDC JWT federation with bounded JWKS rotation and tenant/scope claim enforcement
 - Privacy-bounded cross-tenant CPU/CUDA fleet analytics with transactional PostgreSQL rollups
+- Version-pinned Vault Transit Ed25519 signing with offline public-key verification
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
 - Automated scheduled restore drills and cross-region PostgreSQL replica promotion
 - Additional hosted provider authentication and endpoint-specific adapters
-- Cross-region evidence replication and remote KMS signing adapters
+- Cross-region evidence replication and direct cloud KMS/HSM signing adapters

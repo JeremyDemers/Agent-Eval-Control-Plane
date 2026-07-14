@@ -266,7 +266,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.45.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.46.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -474,6 +474,13 @@ against any persisted checkpoint. See
 [`docs/evidence-checkpoints.md`](docs/evidence-checkpoints.md) for IAM, retention, verification, and
 failure boundaries.
 
+Vault Transit can hold the active Ed25519 private key outside AgentEval. Version-pinned remote signing
+fails closed on transport, response, signature, or key-version errors while stored envelopes remain
+verifiable offline with public keys only. The API returns a sanitized 503 when signing is unavailable,
+and the Kubernetes overlay removes private-key injection from every workload. See
+[`docs/vault-transit-signing.md`](docs/vault-transit-signing.md) for least-privilege policy, rotation,
+token delivery, failure semantics, and the FIPS boundary.
+
 ```bash
 uv run aecontrol store generate-signing-key --algorithm ed25519
 uv run aecontrol store verify
@@ -491,8 +498,8 @@ The browser explorer is intentionally local-trust for this portfolio phase. The 
 backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Automated
-restore drills, cross-region promotion, additional hosted providers, and remote KMS signing remain in
-`docs/roadmap.md`.
+restore drills, cross-region promotion, additional hosted providers, and direct cloud KMS/HSM adapters
+remain in `docs/roadmap.md`.
 
 ## Project Governance
 

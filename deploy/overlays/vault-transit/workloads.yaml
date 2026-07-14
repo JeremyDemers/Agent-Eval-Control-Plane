@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: vault-token
+          secret:
+            secretName: aecontrol-vault-token
+            defaultMode: 0440
+      containers:
+        - name: api
+          env:
+            - name: AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS
+              $patch: delete
+            - {name: AECONTROL_ARTIFACT_VAULT_ADDR, value: "https://vault.vault.svc:8200"}
+            - {name: AECONTROL_ARTIFACT_VAULT_TOKEN_FILE, value: /var/run/secrets/aecontrol-vault/token}
+            - {name: AECONTROL_ARTIFACT_VAULT_MOUNT, value: transit}
+            - {name: AECONTROL_ARTIFACT_VAULT_KEY, value: agent-evidence}
+            - {name: AECONTROL_ARTIFACT_VAULT_KEY_VERSION, value: "1"}
+          volumeMounts:
+            - {name: vault-token, mountPath: /var/run/secrets/aecontrol-vault, readOnly: true}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-worker
+spec:
+  template:
+    spec:
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: vault-token
+          secret:
+            secretName: aecontrol-vault-token
+            defaultMode: 0440
+      containers:
+        - name: worker
+          env:
+            - name: AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS
+              $patch: delete
+            - {name: AECONTROL_ARTIFACT_VAULT_ADDR, value: "https://vault.vault.svc:8200"}
+            - {name: AECONTROL_ARTIFACT_VAULT_TOKEN_FILE, value: /var/run/secrets/aecontrol-vault/token}
+            - {name: AECONTROL_ARTIFACT_VAULT_MOUNT, value: transit}
+            - {name: AECONTROL_ARTIFACT_VAULT_KEY, value: agent-evidence}
+            - {name: AECONTROL_ARTIFACT_VAULT_KEY_VERSION, value: "1"}
+          volumeMounts:
+            - {name: vault-token, mountPath: /var/run/secrets/aecontrol-vault, readOnly: true}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-worker
+spec:
+  template:
+    spec:
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: vault-token
+          secret:
+            secretName: aecontrol-vault-token
+            defaultMode: 0440
+      containers:
+        - name: worker
+          env:
+            - name: AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS
+              $patch: delete
+            - {name: AECONTROL_ARTIFACT_VAULT_ADDR, value: "https://vault.vault.svc:8200"}
+            - {name: AECONTROL_ARTIFACT_VAULT_TOKEN_FILE, value: /var/run/secrets/aecontrol-vault/token}
+            - {name: AECONTROL_ARTIFACT_VAULT_MOUNT, value: transit}
+            - {name: AECONTROL_ARTIFACT_VAULT_KEY, value: agent-evidence}
+            - {name: AECONTROL_ARTIFACT_VAULT_KEY_VERSION, value: "1"}
+          volumeMounts:
+            - {name: vault-token, mountPath: /var/run/secrets/aecontrol-vault, readOnly: true}

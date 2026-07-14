@@ -7,7 +7,7 @@ import os
 import re
 from base64 import b64decode, b64encode
 from binascii import Error as Base64Error
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from cryptography.exceptions import InvalidSignature
@@ -25,6 +25,13 @@ SIGNATURE_ALGORITHMS = frozenset({HMAC_SHA256, ED25519})
 LEDGER_GENESIS_SHA256 = "0" * 64
 _KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _SIGNATURE_CONTEXT = "aecontrol:v1"
+
+
+class ArtifactSigner(Protocol):
+    algorithm: str
+    key_id: str
+
+    def sign(self, message: bytes) -> str: ...
 
 
 def artifact_digest(payload: Any) -> str:
@@ -136,6 +143,7 @@ class ArtifactKeyring:
         active_algorithm: str | None = None,
         ed25519_private_keys: dict[str, bytes] | None = None,
         ed25519_public_keys: dict[str, bytes] | None = None,
+        remote_signer: ArtifactSigner | None = None,
     ) -> None:
         hmac_keys = dict(keys or {})
         private_keys = dict(ed25519_private_keys or {})
@@ -186,12 +194,29 @@ class ArtifactKeyring:
             active_key_id is not None
             and active_algorithm == ED25519
             and active_key_id not in self._ed25519_private_keys
+            and remote_signer is None
         ):
             raise ValueError(
                 f"active artifact signing key {active_key_id!r} has no Ed25519 private key"
             )
+        if remote_signer is not None:
+            if (
+                active_key_id != remote_signer.key_id
+                or active_algorithm != remote_signer.algorithm
+                or active_algorithm != ED25519
+            ):
+                raise ValueError("remote signer must match the active Ed25519 signing key")
+            if active_key_id in self._ed25519_private_keys:
+                raise ValueError(
+                    "remote signer cannot be combined with an active local private key"
+                )
+            if active_key_id not in self._ed25519_public_keys:
+                raise ValueError(
+                    "remote signer requires its active Ed25519 public verification key"
+                )
         self.active_key_id = active_key_id
         self.active_algorithm = active_algorithm
+        self._remote_signer = remote_signer
 
     @classmethod
     def from_environment(cls) -> ArtifactKeyring | None:
@@ -200,9 +225,12 @@ class ArtifactKeyring:
         active_algorithm = os.getenv(SIGNING_ALGORITHM_ENV)
         encoded_private_keys = os.getenv(ED25519_PRIVATE_KEYS_ENV)
         encoded_public_keys = os.getenv(ED25519_PUBLIC_KEYS_ENV)
+        from aecontrol.vault import VaultTransitSigner, vault_configuration_from_environment
+
+        vault = vault_configuration_from_environment()
         new_configuration = any(
             value is not None
-            for value in (active_algorithm, encoded_private_keys, encoded_public_keys)
+            for value in (active_algorithm, encoded_private_keys, encoded_public_keys, vault)
         )
         if not new_configuration and encoded_keys is None and active_key_id is None:
             return None
@@ -221,6 +249,14 @@ class ArtifactKeyring:
             raise ValueError(
                 f"{SIGNING_KEY_ID_ENV} and {SIGNING_ALGORITHM_ENV} must be set together"
             )
+        if vault is not None and (active_key_id is None or active_algorithm != ED25519):
+            raise ValueError("Vault Transit requires an active Ed25519 signing key configuration")
+        public_keys = _decode_optional_key_map(ED25519_PUBLIC_KEYS_ENV, encoded_public_keys)
+        remote_signer = (
+            VaultTransitSigner(vault, active_key_id)
+            if vault is not None and active_key_id is not None
+            else None
+        )
         return cls(
             _decode_optional_key_map(SIGNING_KEYS_ENV, encoded_keys),
             active_key_id,
@@ -228,9 +264,8 @@ class ArtifactKeyring:
             ed25519_private_keys=_decode_optional_key_map(
                 ED25519_PRIVATE_KEYS_ENV, encoded_private_keys
             ),
-            ed25519_public_keys=_decode_optional_key_map(
-                ED25519_PUBLIC_KEYS_ENV, encoded_public_keys
-            ),
+            ed25519_public_keys=public_keys,
+            remote_signer=remote_signer,
         )
 
     def sign(self, artifact_type: str, artifact_id: UUID, payload_sha256: str) -> str:
@@ -241,6 +276,8 @@ class ArtifactKeyring:
             return hmac.new(
                 self._hmac_keys[self.active_key_id], message, hashlib.sha256
             ).hexdigest()
+        if self._remote_signer is not None:
+            return self._remote_signer.sign(message)
         return b64encode(self._ed25519_private_keys[self.active_key_id].sign(message)).decode()
 
     def verify(
