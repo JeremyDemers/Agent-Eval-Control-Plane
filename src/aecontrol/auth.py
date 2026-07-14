@@ -10,11 +10,12 @@ from typing import Annotated, Literal
 import yaml
 from fastapi import HTTPException, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from aecontrol.tenancy import DEFAULT_TENANT_ID, TENANT_ID_PATTERN, bind_tenant, default_tenant_id
+from aecontrol.tenants import ResolvedTenantAPIKey
 
-AuthScope = Literal["read", "write", "admin"]
+AuthScope = Literal["read", "write", "admin", "operator"]
 
 
 class APIKey(BaseModel):
@@ -24,6 +25,12 @@ class APIKey(BaseModel):
     tenant_id: str = Field(default=DEFAULT_TENANT_ID, pattern=TENANT_ID_PATTERN)
     secret_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     scopes: set[AuthScope] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def isolate_operator_scope(self) -> APIKey:
+        if "operator" in self.scopes and self.scopes != {"operator"}:
+            raise ValueError("operator API keys cannot include tenant scopes")
+        return self
 
 
 class AuthConfig(BaseModel):
@@ -65,10 +72,18 @@ def load_auth_config(path: Path) -> AuthConfig:
 
 
 class Authenticator:
-    def __init__(self, config_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        config_path: str | Path | None = None,
+        *,
+        credential_lookup: Callable[[str], ResolvedTenantAPIKey | None] | None = None,
+        tenant_access_allowed: Callable[[str], bool] | None = None,
+    ) -> None:
         resolved = config_path or os.getenv("AECONTROL_AUTH_CONFIG")
         self.config_path = Path(resolved) if resolved else None
         self.config = load_auth_config(self.config_path) if self.config_path else None
+        self.credential_lookup = credential_lookup
+        self.tenant_access_allowed = tenant_access_allowed
 
     @property
     def enabled(self) -> bool:
@@ -103,18 +118,39 @@ class Authenticator:
                 ),
                 None,
             )
-            if key is None:
+            resolved_key = self.credential_lookup(candidate) if self.credential_lookup else None
+            if key is None and resolved_key is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="API key is invalid",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            if scope not in key.scopes and "admin" not in key.scopes:
+            if key is not None:
+                tenant_id = key.tenant_id
+                key_id = key.key_id
+                scopes = key.scopes
+                if (
+                    "operator" not in scopes
+                    and self.tenant_access_allowed is not None
+                    and not self.tenant_access_allowed(tenant_id)
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="API key is invalid",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+            else:
+                assert resolved_key is not None
+                tenant_id = resolved_key.tenant_id
+                key_id = resolved_key.key_id
+                scopes = set(resolved_key.scopes)
+            authorized = scope in scopes or (scope != "operator" and "admin" in scopes)
+            if not authorized:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"API key requires the {scope} scope",
                 )
-            principal = Principal(key_id=key.key_id, tenant_id=key.tenant_id, scopes=key.scopes)
+            principal = Principal(key_id=key_id, tenant_id=tenant_id, scopes=scopes)
             bind_tenant(principal.tenant_id)
             request.state.principal = principal
             return principal

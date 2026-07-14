@@ -82,6 +82,13 @@
   defaults, safe diagnostics, and a real immutable-image sandbox demo.
 - Bounded health-checked PostgreSQL pooling for APIs/workers, replica-safe advisory schema locks,
   saturation metrics, direct/PgBouncer mode, and managed-service TLS guidance.
+- Forced-RLS tenant isolation with API-key-bound identities and tenant-specific worker execution.
+- Ed25519 evidence attestations and a tenant-scoped append-only transparency ledger with deletion
+  detection and public-key-only verification.
+- CloudNativePG high availability, Barman Cloud WAL archiving, point-in-time recovery templates, and
+  backup-health alerts.
+- Self-service tenant lifecycle with isolated platform-operator scope, one-time key issuance,
+  transactional rotation, revocation history, and fail-closed suspension.
 
 ## Verification
 
@@ -105,5 +112,5 @@
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
-- Kubernetes database/operator integration, VM-grade worker isolation, additional hosted providers,
-  and multi-tenancy remain on the roadmap.
+- VM-grade worker isolation, automated restore drills, remote KMS signing, identity federation,
+  retention-locked evidence export, and additional hosted providers remain on the roadmap.

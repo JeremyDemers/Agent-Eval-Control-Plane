@@ -47,6 +47,12 @@ if that version is no longer active, allowing deployment automation to detect po
 label in signed evidence. `guardrail_efficacy` then returns typed, per-version confusion matrices and
 derived metrics; the asynchronous client exposes the same method.
 
+Platform automation can use `tenants`, `create_tenant`, and `set_tenant_status` with an `operator`
+credential. Tenant admins use `tenant`, `tenant_api_keys`, `issue_tenant_api_key`, and
+`revoke_tenant_api_key`; issued secrets appear only in the returned `IssuedTenantAPIKey`. The
+asynchronous client has matching coroutine methods. See
+[`tenant-lifecycle.md`](tenant-lifecycle.md) for scope separation and rotation invariants.
+
 The default HTTP transport accepts only absolute HTTP(S) URLs, supports caller-generated request IDs,
 normalizes structured API and connection failures into `AgentEvalAPIError`, and rejects malformed JSON
 or unexpected response shapes. Tests inject the transport protocol, allowing deterministic lifecycle

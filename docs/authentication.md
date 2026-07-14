@@ -48,5 +48,18 @@ binding, migration behavior, and the database-role trust boundary.
 operations, and `admin` satisfies every scope within the key's tenant. Guardrails configuration
 registration and activation specifically require `admin`; activation history and version inventory
 require `read`. Keys should be random and rotated through the
-deployment secret manager; the service stores only their digests in memory and never logs bearer
-credentials.
+deployment secret manager; the service keeps static digests in memory and never logs bearer
+credentials. Dynamically issued key digests remain in PostgreSQL as described below.
+
+## Bootstrap operator and dynamic keys
+
+Schema v15 supports persisted tenant credentials in addition to static YAML credentials. Configure a
+bootstrap key with `scopes: [operator]` to provision, suspend, and reactivate tenants. `operator` is an
+isolated cross-tenant lifecycle scope: it cannot be combined with tenant scopes and does not authorize
+access to runs, jobs, comparisons, guardrails evidence, or integrity reports.
+
+Provisioning returns a generated plaintext tenant-admin key exactly once. Subsequent tenant keys are
+created and revoked by that tenant's `admin` credentials. Dynamic digests are stored in PostgreSQL;
+they are never returned, logged, or loaded into the static configuration. The final active admin key
+cannot be revoked. See [`tenant-lifecycle.md`](tenant-lifecycle.md) for endpoints, SDK methods,
+suspension behavior, and rotation examples.

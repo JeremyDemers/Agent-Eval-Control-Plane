@@ -35,6 +35,13 @@ from aecontrol.models import (
     StoredComparisonSummary,
     StoredRunSummary,
 )
+from aecontrol.tenants import (
+    IssuedTenantAPIKey,
+    TenantAPIKeyRecord,
+    TenantRecord,
+    TenantScope,
+    TenantStatus,
+)
 
 JsonObject = dict[str, Any]
 TERMINAL_JOB_STATES = {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}
@@ -123,6 +130,53 @@ class AgentEvalClient:
     def verify_artifacts(self) -> ArtifactIntegrityReport:
         return ArtifactIntegrityReport.model_validate(
             self.transport.request("GET", "/api/v1/integrity")
+        )
+
+    def tenants(self) -> list[TenantRecord]:
+        payload = self.transport.request("GET", "/api/v1/platform/tenants")
+        return [TenantRecord.model_validate(item) for item in _list(payload)]
+
+    def create_tenant(
+        self, tenant_id: str, display_name: str, initial_key_id: str = "tenant-admin"
+    ) -> IssuedTenantAPIKey:
+        return IssuedTenantAPIKey.model_validate(
+            self.transport.request(
+                "POST",
+                "/api/v1/platform/tenants",
+                {
+                    "tenant_id": tenant_id,
+                    "display_name": display_name,
+                    "initial_key_id": initial_key_id,
+                },
+            )
+        )
+
+    def set_tenant_status(self, tenant_id: str, status: TenantStatus) -> TenantRecord:
+        return TenantRecord.model_validate(
+            self.transport.request(
+                "PATCH", f"/api/v1/platform/tenants/{tenant_id}", {"status": status}
+            )
+        )
+
+    def tenant(self) -> TenantRecord:
+        return TenantRecord.model_validate(self.transport.request("GET", "/api/v1/tenant"))
+
+    def tenant_api_keys(self) -> list[TenantAPIKeyRecord]:
+        payload = self.transport.request("GET", "/api/v1/tenant/api-keys")
+        return [TenantAPIKeyRecord.model_validate(item) for item in _list(payload)]
+
+    def issue_tenant_api_key(self, key_id: str, scopes: set[TenantScope]) -> IssuedTenantAPIKey:
+        return IssuedTenantAPIKey.model_validate(
+            self.transport.request(
+                "POST",
+                "/api/v1/tenant/api-keys",
+                {"key_id": key_id, "scopes": sorted(scopes)},
+            )
+        )
+
+    def revoke_tenant_api_key(self, key_id: str) -> TenantAPIKeyRecord:
+        return TenantAPIKeyRecord.model_validate(
+            self.transport.request("DELETE", f"/api/v1/tenant/api-keys/{key_id}")
         )
 
     def guardrail_configs(self) -> list[GuardrailsConfig]:
@@ -350,6 +404,33 @@ class AsyncAgentEvalClient:
 
     async def verify_artifacts(self) -> ArtifactIntegrityReport:
         return await asyncio.to_thread(self._sync.verify_artifacts)
+
+    async def tenants(self) -> list[TenantRecord]:
+        return await asyncio.to_thread(self._sync.tenants)
+
+    async def create_tenant(
+        self, tenant_id: str, display_name: str, initial_key_id: str = "tenant-admin"
+    ) -> IssuedTenantAPIKey:
+        return await asyncio.to_thread(
+            self._sync.create_tenant, tenant_id, display_name, initial_key_id
+        )
+
+    async def set_tenant_status(self, tenant_id: str, status: TenantStatus) -> TenantRecord:
+        return await asyncio.to_thread(self._sync.set_tenant_status, tenant_id, status)
+
+    async def tenant(self) -> TenantRecord:
+        return await asyncio.to_thread(self._sync.tenant)
+
+    async def tenant_api_keys(self) -> list[TenantAPIKeyRecord]:
+        return await asyncio.to_thread(self._sync.tenant_api_keys)
+
+    async def issue_tenant_api_key(
+        self, key_id: str, scopes: set[TenantScope]
+    ) -> IssuedTenantAPIKey:
+        return await asyncio.to_thread(self._sync.issue_tenant_api_key, key_id, scopes)
+
+    async def revoke_tenant_api_key(self, key_id: str) -> TenantAPIKeyRecord:
+        return await asyncio.to_thread(self._sync.revoke_tenant_api_key, key_id)
 
     async def guardrail_configs(self) -> list[GuardrailsConfig]:
         return await asyncio.to_thread(self._sync.guardrail_configs)

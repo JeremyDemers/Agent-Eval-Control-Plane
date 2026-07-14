@@ -54,16 +54,24 @@ and a dedicated hardened worker boundary.
 
 ## Tenant Boundary
 
-Authenticated tenant identity comes only from the operator-owned API-key configuration. Schema v12
-enables and forces PostgreSQL row-level security on every tenant data table, sets identity locally in
-each transaction, and uses tenant-aware relational constraints. Request headers, paths, and payloads
-cannot select or override a tenant. Tenant admins remain scoped to their configured tenant.
+Authenticated tenant identity comes only from the operator-owned API-key configuration or the schema
+v15 credential registry. Schema v12 enables and forces PostgreSQL row-level security on every tenant
+data table, sets identity locally in each transaction, and uses tenant-aware relational constraints.
+Request headers, paths, and payloads cannot select or override a tenant. Tenant admins remain scoped
+to their resolved tenant.
 
 Production database roles must be non-superusers without `BYPASSRLS`; PostgreSQL superusers bypass
 row-level security even when it is forced. Database credentials, authentication configuration, and
 tenant-specific worker environments remain trusted operator assets. The browser and unauthenticated
 operational endpoints expose only the deployment's configured default tenant, not a global tenant
 inventory. See [`multi-tenancy.md`](multi-tenancy.md) for migration and deployment details.
+
+The schema v15 tenant and credential registries intentionally sit outside RLS because authentication
+must resolve a digest before binding tenant context. Only isolated static `operator` credentials can
+provision or suspend tenants, while tenant `admin` credentials can rotate keys only in their own
+namespace. Suspension fails closed, plaintext dynamic keys are returned once, and transactional
+revocation preserves at least one active admin. The application database role can still read stored
+digests and remains trusted. See [`tenant-lifecycle.md`](tenant-lifecycle.md).
 
 ## Evidence Boundary
 
@@ -86,7 +94,7 @@ PostgreSQL. See [`artifact-integrity.md`](artifact-integrity.md) and
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.40.0
+development-only tools so its result describes the shipped runtime environment. The v0.41.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults

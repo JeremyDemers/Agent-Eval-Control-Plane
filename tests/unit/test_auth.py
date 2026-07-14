@@ -49,6 +49,13 @@ def test_auth_config_rejects_invalid_and_duplicate_keys(tmp_path: Path) -> None:
     with pytest.raises(ValidationError):
         load_auth_config(invalid_scope)
 
+    mixed_operator_scope = _write_config(
+        tmp_path / "mixed-operator.yaml",
+        f"  - key_id: operator\n    secret_sha256: {digest}\n    scopes: [operator, admin]\n",
+    )
+    with pytest.raises(ValidationError, match="cannot include tenant scopes"):
+        load_auth_config(mixed_operator_scope)
+
     invalid_tenant = _write_config(
         tmp_path / "invalid-tenant.yaml",
         f"  - key_id: bad\n    tenant_id: Other/Tenant\n"
@@ -62,3 +69,9 @@ def test_auth_config_rejects_invalid_and_duplicate_keys(tmp_path: Path) -> None:
         f"  - key_id: compatible\n    secret_sha256: {digest}\n    scopes: [read]\n",
     )
     assert load_auth_config(default_tenant).keys[0].tenant_id == "default"
+
+    operator = _write_config(
+        tmp_path / "operator.yaml",
+        f"  - key_id: bootstrap\n    secret_sha256: {digest}\n    scopes: [operator]\n",
+    )
+    assert load_auth_config(operator).keys[0].scopes == {"operator"}

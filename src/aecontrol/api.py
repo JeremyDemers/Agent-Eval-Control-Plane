@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -20,7 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
-from aecontrol.auth import Authenticator, Principal
+from aecontrol.auth import Authenticator, Principal, hash_api_key
 from aecontrol.compare import compare_runs
 from aecontrol.database import (
     DatabaseRuntimeConfiguration,
@@ -67,6 +68,16 @@ from aecontrol.telemetry import (
     shutdown_telemetry,
 )
 from aecontrol.tenancy import bind_tenant, default_tenant_id, reset_tenant
+from aecontrol.tenants import (
+    IssuedTenantAPIKey,
+    LastTenantAdminError,
+    TenantAPIKeyRecord,
+    TenantConflictError,
+    TenantRecord,
+    TenantScope,
+    TenantStatus,
+    TenantSuspendedError,
+)
 from aecontrol.tracing import span
 
 DEFAULT_DATABASE_URL = "postgresql://aecontrol@127.0.0.1:55432/aecontrol"
@@ -125,6 +136,23 @@ class GuardrailConfigActivationRequest(BaseModel):
     version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
+class TenantCreateRequest(BaseModel):
+    tenant_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
+    display_name: str = Field(min_length=1, max_length=200)
+    initial_key_id: str = Field(
+        default="tenant-admin", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    )
+
+
+class TenantStatusRequest(BaseModel):
+    status: TenantStatus
+
+
+class TenantAPIKeyRequest(BaseModel):
+    key_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    scopes: set[TenantScope] = Field(min_length=1)
+
+
 def create_app(
     database_url: str | None = None,
     schema: str = "public",
@@ -148,10 +176,15 @@ def create_app(
         database_config=database_config or database_configuration_from_environment(),
     )
     guardrails = guardrails_client or GuardrailsClient()
-    authenticator = Authenticator(auth_config)
+    authenticator = Authenticator(
+        auth_config,
+        credential_lookup=store.resolve_tenant_api_key,
+        tenant_access_allowed=store.tenant_access_allowed,
+    )
     require_read = authenticator.require("read")
     require_write = authenticator.require("write")
     require_admin = authenticator.require("admin")
+    require_operator = authenticator.require("operator")
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
@@ -288,6 +321,140 @@ def create_app(
     )
     def integrity(_principal: Principal = Depends(require_read)) -> ArtifactIntegrityReport:
         return store.verify_artifacts()
+
+    @application.get(
+        "/api/v1/platform/tenants",
+        response_model=list[TenantRecord],
+        tags=["tenants"],
+    )
+    async def list_tenants(
+        _principal: Principal = Depends(require_operator),
+    ) -> list[TenantRecord]:
+        return await asyncio.to_thread(store.list_tenants)
+
+    @application.post(
+        "/api/v1/platform/tenants",
+        response_model=IssuedTenantAPIKey,
+        status_code=status.HTTP_201_CREATED,
+        tags=["tenants"],
+    )
+    async def create_tenant(
+        request: TenantCreateRequest,
+        response: Response,
+        principal: Principal = Depends(require_operator),
+    ) -> IssuedTenantAPIKey:
+        response.headers["Cache-Control"] = "no-store"
+        secret = secrets.token_urlsafe(32)
+        try:
+            tenant, key = await asyncio.to_thread(
+                store.create_tenant,
+                request.tenant_id,
+                request.display_name,
+                request.initial_key_id,
+                hash_api_key(secret),
+                created_by=principal.key_id,
+            )
+        except TenantConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return IssuedTenantAPIKey(tenant=tenant, key=key, secret=secret)
+
+    @application.patch(
+        "/api/v1/platform/tenants/{tenant_id}",
+        response_model=TenantRecord,
+        tags=["tenants"],
+    )
+    async def set_tenant_status(
+        tenant_id: str,
+        request: TenantStatusRequest,
+        principal: Principal = Depends(require_operator),
+    ) -> TenantRecord:
+        try:
+            return await asyncio.to_thread(
+                store.set_tenant_status,
+                tenant_id,
+                request.status,
+                updated_by=principal.key_id,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="tenant was not found") from error
+
+    @application.get(
+        "/api/v1/tenant",
+        response_model=TenantRecord,
+        tags=["tenants"],
+    )
+    async def get_current_tenant(
+        principal: Principal = Depends(require_read),
+    ) -> TenantRecord:
+        try:
+            return await asyncio.to_thread(store.get_tenant, principal.tenant_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="tenant was not found") from error
+
+    @application.get(
+        "/api/v1/tenant/api-keys",
+        response_model=list[TenantAPIKeyRecord],
+        tags=["tenants"],
+    )
+    async def list_tenant_api_keys(
+        principal: Principal = Depends(require_admin),
+    ) -> list[TenantAPIKeyRecord]:
+        try:
+            return await asyncio.to_thread(store.list_tenant_api_keys, principal.tenant_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="tenant was not found") from error
+
+    @application.post(
+        "/api/v1/tenant/api-keys",
+        response_model=IssuedTenantAPIKey,
+        status_code=status.HTTP_201_CREATED,
+        tags=["tenants"],
+    )
+    async def issue_tenant_api_key(
+        request: TenantAPIKeyRequest,
+        response: Response,
+        principal: Principal = Depends(require_admin),
+    ) -> IssuedTenantAPIKey:
+        response.headers["Cache-Control"] = "no-store"
+        secret = secrets.token_urlsafe(32)
+        try:
+            key = await asyncio.to_thread(
+                store.issue_tenant_api_key,
+                principal.tenant_id,
+                request.key_id,
+                hash_api_key(secret),
+                request.scopes,
+                created_by=principal.key_id,
+            )
+            tenant = await asyncio.to_thread(store.get_tenant, principal.tenant_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="tenant was not found") from error
+        except TenantConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except TenantSuspendedError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return IssuedTenantAPIKey(tenant=tenant, key=key, secret=secret)
+
+    @application.delete(
+        "/api/v1/tenant/api-keys/{key_id}",
+        response_model=TenantAPIKeyRecord,
+        tags=["tenants"],
+    )
+    async def revoke_tenant_api_key(
+        key_id: str,
+        principal: Principal = Depends(require_admin),
+    ) -> TenantAPIKeyRecord:
+        try:
+            return await asyncio.to_thread(
+                store.revoke_tenant_api_key,
+                principal.tenant_id,
+                key_id,
+                revoked_by=principal.key_id,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="API key was not found") from error
+        except LastTenantAdminError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.get(
         "/api/v1/guardrails/configs",
