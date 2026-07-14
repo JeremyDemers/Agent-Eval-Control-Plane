@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      serviceAccountName: aecontrol-gcp-kms-signer
+      containers:
+        - name: api
+          env:
+            - name: AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS
+              $patch: delete
+            - name: AECONTROL_ARTIFACT_GCP_KMS_KEY_VERSION
+              value: projects/replace-project/locations/us-central1/keyRings/evidence/cryptoKeys/artifact-signing/cryptoKeyVersions/1
+            - {name: AECONTROL_ARTIFACT_GCP_KMS_PROTECTION_LEVEL, value: HSM}
+            - {name: AECONTROL_ARTIFACT_GCP_KMS_TIMEOUT_SECONDS, value: "5"}
+            - {name: AECONTROL_ARTIFACT_GCP_KMS_INTEGRITY_ATTEMPTS, value: "3"}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-worker
+spec:
+  template:
+    spec:
+      serviceAccountName: aecontrol-gcp-kms-signer
+      containers:
+        - name: worker
+          env:
+            - name: AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS
+              $patch: delete
+            - name: AECONTROL_ARTIFACT_GCP_KMS_KEY_VERSION
+              value: projects/replace-project/locations/us-central1/keyRings/evidence/cryptoKeys/artifact-signing/cryptoKeyVersions/1
+            - {name: AECONTROL_ARTIFACT_GCP_KMS_PROTECTION_LEVEL, value: HSM}
+            - {name: AECONTROL_ARTIFACT_GCP_KMS_TIMEOUT_SECONDS, value: "5"}
+            - {name: AECONTROL_ARTIFACT_GCP_KMS_INTEGRITY_ATTEMPTS, value: "3"}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-worker
+spec:
+  template:
+    spec:
+      serviceAccountName: aecontrol-gcp-kms-signer
+      containers:
+        - name: worker
+          env:
+            - name: AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS
+              $patch: delete
+            - name: AECONTROL_ARTIFACT_GCP_KMS_KEY_VERSION
+              value: projects/replace-project/locations/us-central1/keyRings/evidence/cryptoKeys/artifact-signing/cryptoKeyVersions/1
+            - {name: AECONTROL_ARTIFACT_GCP_KMS_PROTECTION_LEVEL, value: HSM}
+            - {name: AECONTROL_ARTIFACT_GCP_KMS_TIMEOUT_SECONDS, value: "5"}
+            - {name: AECONTROL_ARTIFACT_GCP_KMS_INTEGRITY_ATTEMPTS, value: "3"}

@@ -271,7 +271,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.53.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.54.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -535,6 +535,12 @@ while retaining readable unsigned legacy evidence. See
 [`docs/artifact-integrity.md`](docs/artifact-integrity.md) for public-verifier configuration,
 mixed-algorithm rotation, and threat-model limits.
 
+New evidence can also be signed by a version-pinned Google Cloud KMS or Cloud HSM Ed25519 key. The
+signer verifies request and response CRC32C, exact key version, protection level, signature shape, and
+the resulting signature locally before persistence. The GKE overlay uses Workload Identity
+Federation without service-account key files. See
+[`docs/gcp-kms-signing.md`](docs/gcp-kms-signing.md).
+
 ## Current Limitations
 
 The browser explorer is intentionally local-trust for this portfolio phase. The default process
@@ -544,7 +550,7 @@ consumes but does not install or reconfigure Kata Containers, NVIDIA GPU Operato
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Cross-region
 provider-native object replication and fencing outside Kubernetes remain platform-owned controls;
 automatic multi-writer operation is intentionally unsupported. Additional provider-specific
-adapters, other cloud KMS products, and dedicated HSM adapters remain in `docs/roadmap.md`.
+adapters, other cloud KMS products, and dedicated HSM products remain in `docs/roadmap.md`.
 
 ## Project Governance
 

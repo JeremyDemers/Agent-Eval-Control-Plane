@@ -230,12 +230,16 @@ class ArtifactKeyring:
         encoded_private_keys = os.getenv(ED25519_PRIVATE_KEYS_ENV)
         encoded_public_keys = os.getenv(ED25519_PUBLIC_KEYS_ENV)
         from aecontrol.aws_kms import AWSKMSSigner, aws_kms_configuration_from_environment
+        from aecontrol.gcp_kms import GCPKMSSigner, gcp_kms_configuration_from_environment
         from aecontrol.vault import VaultTransitSigner, vault_configuration_from_environment
 
         vault = vault_configuration_from_environment()
         aws_kms = aws_kms_configuration_from_environment()
-        if vault is not None and aws_kms is not None:
-            raise ValueError("Vault Transit and AWS KMS artifact signing are mutually exclusive")
+        gcp_kms = gcp_kms_configuration_from_environment()
+        if sum(item is not None for item in (vault, aws_kms, gcp_kms)) > 1:
+            raise ValueError(
+                "Vault Transit, AWS KMS, and Google Cloud KMS artifact signing are mutually exclusive"
+            )
         new_configuration = any(
             value is not None
             for value in (
@@ -244,6 +248,7 @@ class ArtifactKeyring:
                 encoded_public_keys,
                 vault,
                 aws_kms,
+                gcp_kms,
             )
         )
         if not new_configuration and encoded_keys is None and active_key_id is None:
@@ -267,12 +272,18 @@ class ArtifactKeyring:
             raise ValueError("Vault Transit requires an active Ed25519 signing key configuration")
         if aws_kms is not None and (active_key_id is None or active_algorithm != ED25519):
             raise ValueError("AWS KMS requires an active Ed25519 signing key configuration")
+        if gcp_kms is not None and (active_key_id is None or active_algorithm != ED25519):
+            raise ValueError(
+                "Google Cloud KMS requires an active Ed25519 signing key configuration"
+            )
         public_keys = _decode_optional_key_map(ED25519_PUBLIC_KEYS_ENV, encoded_public_keys)
         remote_signer: ArtifactSigner | None = None
         if vault is not None and active_key_id is not None:
             remote_signer = VaultTransitSigner(vault, active_key_id)
         elif aws_kms is not None and active_key_id is not None:
             remote_signer = AWSKMSSigner.from_configuration(aws_kms, active_key_id)
+        elif gcp_kms is not None and active_key_id is not None:
+            remote_signer = GCPKMSSigner.from_configuration(gcp_kms, active_key_id)
         return cls(
             _decode_optional_key_map(SIGNING_KEYS_ENV, encoded_keys),
             active_key_id,

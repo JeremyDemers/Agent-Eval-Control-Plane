@@ -29,6 +29,7 @@
 - AWS KMS can sign evidence with non-exportable Ed25519 keys and offline verification.
 - Kata RuntimeClass Jobs provide one credential-free microVM boundary per candidate test.
 - Amazon Bedrock Converse provides a native hosted runtime with IRSA-ready worker placement.
+- Google Cloud KMS signs evidence with pinned Ed25519 key versions and CRC32C integrity checks.
 
 ## Implemented
 
@@ -111,6 +112,8 @@
   credential exclusion, hardened pod controls, bounded deadlines, and foreground cleanup.
 - Native Amazon Bedrock Converse runtime with forced schema-backed tool output, sanitized evidence,
   model discovery, automatic worker labels, and a least-privilege IRSA deployment overlay.
+- Version-pinned Google Cloud KMS and Cloud HSM Ed25519 signing with raw-data and signature CRC32C,
+  exact protection-level enforcement, offline verification, and GKE Workload Identity.
 
 ## Verification
 
