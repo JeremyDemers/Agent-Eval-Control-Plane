@@ -1,0 +1,65 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aecontrol-recovery-verification
+  namespace: aecontrol
+  labels:
+    app.kubernetes.io/name: aecontrol-recovery-verification
+    app.kubernetes.io/part-of: aecontrol
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aecontrol-recovery-verification
+        app.kubernetes.io/part-of: aecontrol
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: verifier
+          image: ghcr.io/jeremydemers/agent-eval-control-plane:0.47.0
+          imagePullPolicy: IfNotPresent
+          command: [/app/.venv/bin/aecontrol]
+          args:
+            - store
+            - verify-recovery
+            - --checkpoint
+            - /var/run/aecontrol-recovery/checkpoint.json
+            - --max-checkpoint-age-hours
+            - "48"
+            - --json
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aecontrol-postgres-restore-app
+                  key: uri
+            - name: AECONTROL_ARTIFACT_ED25519_PUBLIC_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: aecontrol-recovery-verifier
+                  key: ed25519-public-keys
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: checkpoint
+              mountPath: /var/run/aecontrol-recovery
+              readOnly: true
+      volumes:
+        - name: checkpoint
+          secret:
+            secretName: aecontrol-recovery-checkpoint
+            defaultMode: 0440

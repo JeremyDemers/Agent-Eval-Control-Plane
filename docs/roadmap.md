@@ -52,6 +52,6 @@ Implemented ahead of the original four-day scope:
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
-- Automated scheduled restore drills and cross-region PostgreSQL replica promotion
+- Scheduled restore-cluster orchestration, drill-report archival, and cross-region PostgreSQL replica promotion
 - Additional hosted provider authentication and endpoint-specific adapters
 - Cross-region evidence replication and direct cloud KMS/HSM signing adapters

@@ -326,6 +326,42 @@ def test_cloudnative_pg_restore_template_is_isolated_and_time_targeted() -> None
     assert spec["walStorage"]["size"] == "5Gi"
 
 
+def test_recovery_verification_job_is_read_only_bounded_and_uses_public_keys() -> None:
+    job = yaml.safe_load(
+        Path(
+            "deploy/overlays/cloudnative-pg-pitr/recovery-verification-job.example.yaml"
+        ).read_text()
+    )
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    spec = job["spec"]
+    pod = spec["template"]["spec"]
+    container = pod["containers"][0]
+    assert job["kind"] == "Job"
+    assert spec["backoffLimit"] == 0
+    assert spec["activeDeadlineSeconds"] == 1800
+    assert pod["automountServiceAccountToken"] is False
+    assert pod["securityContext"]["runAsNonRoot"] is True
+    assert container["image"].endswith(f":{project['project']['version']}")
+    assert container["command"] == ["/app/.venv/bin/aecontrol"]
+    assert container["args"][:3] == ["store", "verify-recovery", "--checkpoint"]
+    assert "--json" in container["args"]
+    assert container["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+        "readOnlyRootFilesystem": True,
+    }
+    environment = {item["name"]: item["valueFrom"] for item in container["env"]}
+    assert environment["DATABASE_URL"]["secretKeyRef"] == {
+        "name": "aecontrol-postgres-restore-app",
+        "key": "uri",
+    }
+    assert environment["AECONTROL_ARTIFACT_ED25519_PUBLIC_KEYS"]["secretKeyRef"]["name"] == (
+        "aecontrol-recovery-verifier"
+    )
+    assert "AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS" not in environment
+    assert "AECONTROL_ARTIFACT_VAULT_TOKEN" not in environment
+
+
 def test_cloudnative_pg_pitr_monitoring_alerts_on_failed_and_stale_backups() -> None:
     root = Path("deploy/overlays/cloudnative-pg-pitr-monitoring")
     kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())

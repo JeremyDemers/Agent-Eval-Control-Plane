@@ -250,7 +250,10 @@ Tagged releases publish a GHCR image with an SBOM and build provenance. See
 The production CloudNativePG overlay provisions a three-instance PostgreSQL 17 cluster with
 synchronous replication, quorum-guarded failover, topology spread, and an optional PodMonitor.
 The Barman Cloud overlay adds continuous WAL archiving, encrypted daily base backups, a 30-day
-recovery window, backup-health alerts, and an isolated point-in-time recovery template.
+recovery window, backup-health alerts, and an isolated point-in-time recovery template. A read-only
+recovery verifier proves the restored schema, signed external checkpoints, ledger continuity, source
+artifact digests, and signatures without migrating the candidate database. See
+[`docs/recovery-verification.md`](docs/recovery-verification.md).
 An optional KEDA overlay scales CPU and NVIDIA workers from durable PostgreSQL queue depth.
 An independent MIG overlay consumes profile-specific resources exposed by NVIDIA GPU Operator's
 mixed strategy and registers profile-aware worker pools.
@@ -266,7 +269,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.46.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.47.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -497,9 +500,9 @@ mixed-algorithm rotation, and threat-model limits.
 The browser explorer is intentionally local-trust for this portfolio phase. The default process
 backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
-DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Automated
-restore drills, cross-region promotion, additional hosted providers, and direct cloud KMS/HSM adapters
-remain in `docs/roadmap.md`.
+DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Scheduled
+restore-cluster orchestration and cleanup, cross-region promotion, additional hosted providers, and
+direct cloud KMS/HSM adapters remain in `docs/roadmap.md`.
 
 ## Project Governance
 
