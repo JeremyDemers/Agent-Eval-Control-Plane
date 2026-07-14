@@ -23,13 +23,19 @@ restart every signing workload before verifying the store. Independent audit dep
 the public map. A production cluster should source private material from an external secret manager
 rather than committing it.
 
+For per-test microVM isolation, install Kata Containers through the cluster platform, verify its CRI
+handler and dedicated nodes, replace the sandbox image digest, and apply
+`deploy/overlays/kata-sandbox`. The overlay gives API/workers narrowly scoped Job-controller RBAC but
+does not install or mutate the cluster-scoped runtime. Candidate Jobs receive no controller token or
+credentials. See [`kata-sandbox.md`](kata-sandbox.md).
+
 API, CPU worker, full-GPU worker, and MIG worker pods run as non-root with Kubernetes
 `RuntimeDefault` seccomp confinement. Every application container disables privilege escalation and
 drops all Linux capabilities. Cluster policy should enforce these fields at admission and apply a
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.51.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.52.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 

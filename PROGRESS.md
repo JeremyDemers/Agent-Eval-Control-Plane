@@ -26,6 +26,8 @@
 - Cross-region CloudNativePG controlled promotion is guarded by token, topology, system-ID, and
   optimistic-concurrency validation.
 - Signed ledger checkpoints publish and read-verify across independent Object Lock destinations.
+- AWS KMS can sign evidence with non-exportable Ed25519 keys and offline verification.
+- Kata RuntimeClass Jobs provide one credential-free microVM boundary per candidate test.
 
 ## Implemented
 
@@ -103,6 +105,9 @@
   REST/CLI/SDK access, live quota saturation, and sensitive-field exclusion tests.
 - Version-pinned Vault Transit Ed25519 signing with no local private key, public-only verification,
   sanitized fail-closed API behavior, and a non-root Kubernetes token-file overlay.
+- Pinned AWS KMS Ed25519 signing with local response verification and an IRSA-ready overlay.
+- Per-test Kubernetes Job execution under a pinned Kata RuntimeClass, with deny-all networking,
+  credential exclusion, hardened pod controls, bounded deadlines, and foreground cleanup.
 
 ## Verification
 
@@ -126,5 +131,5 @@
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
-- VM-grade worker isolation, direct cloud KMS/HSM signing, cross-region database and evidence
-  replication, and additional hosted providers remain on the roadmap.
+- The browser remains local-trust. Additional hosted providers, other cloud KMS products, and
+  dedicated HSM adapters remain on the roadmap.

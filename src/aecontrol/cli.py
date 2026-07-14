@@ -34,6 +34,7 @@ from aecontrol.guardrails import GuardrailsClient, GuardrailsError, guardrail_bu
 from aecontrol.hardware import detect_worker_capabilities
 from aecontrol.integrity import ED25519, HMAC_SHA256, ArtifactKeyring, generate_ed25519_keypair
 from aecontrol.jobs import EvaluationWorker
+from aecontrol.kubernetes_sandbox import kubernetes_sandbox_configuration_from_environment
 from aecontrol.models import Accelerator, EvaluationRun, GateOutcome, JobStatus, RunComparison
 from aecontrol.nim import NIMClient
 from aecontrol.ollama import OllamaClient, OllamaError
@@ -150,6 +151,17 @@ def doctor() -> None:
             "sandbox policies: "
             f"seccomp={'custom' if sandbox.seccomp_profile else 'runtime-default'}, "
             f"apparmor={sandbox.apparmor_profile or 'runtime-default'}"
+        )
+    elif backend == "kubernetes-runtimeclass":
+        kubernetes_sandbox = kubernetes_sandbox_configuration_from_environment()
+        console.print(
+            "sandbox runtime: "
+            f"class={kubernetes_sandbox.runtime_class} "
+            f"handler={kubernetes_sandbox.runtime_handler}"
+        )
+        console.print(
+            f"sandbox image: digest-pinned namespace={kubernetes_sandbox.namespace} "
+            f"startup_timeout={kubernetes_sandbox.startup_timeout_seconds:g}s"
         )
     database = database_configuration_from_environment()
     if database.pooling_enabled:

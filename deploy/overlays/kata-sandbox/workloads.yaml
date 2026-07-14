@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      serviceAccountName: aecontrol-sandbox-controller
+      containers:
+        - name: api
+          env:
+            - {name: AECONTROL_SANDBOX_BACKEND, value: kubernetes-runtimeclass}
+            - name: AECONTROL_SANDBOX_KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef: {fieldPath: metadata.namespace}
+            - {name: AECONTROL_SANDBOX_KUBERNETES_RUNTIME_CLASS, value: kata-qemu}
+            - {name: AECONTROL_SANDBOX_KUBERNETES_RUNTIME_HANDLER, value: kata-qemu}
+            - name: AECONTROL_SANDBOX_IMAGE
+              value: docker.io/library/python@sha256:REPLACE_WITH_64_HEX_DIGEST
+            - {name: AECONTROL_SANDBOX_KUBERNETES_STARTUP_TIMEOUT_SECONDS, value: "30"}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-worker
+spec:
+  template:
+    spec:
+      serviceAccountName: aecontrol-sandbox-controller
+      containers:
+        - name: worker
+          env:
+            - {name: AECONTROL_SANDBOX_BACKEND, value: kubernetes-runtimeclass}
+            - name: AECONTROL_SANDBOX_KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef: {fieldPath: metadata.namespace}
+            - {name: AECONTROL_SANDBOX_KUBERNETES_RUNTIME_CLASS, value: kata-qemu}
+            - {name: AECONTROL_SANDBOX_KUBERNETES_RUNTIME_HANDLER, value: kata-qemu}
+            - name: AECONTROL_SANDBOX_IMAGE
+              value: docker.io/library/python@sha256:REPLACE_WITH_64_HEX_DIGEST
+            - {name: AECONTROL_SANDBOX_KUBERNETES_STARTUP_TIMEOUT_SECONDS, value: "30"}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-worker
+spec:
+  template:
+    spec:
+      serviceAccountName: aecontrol-sandbox-controller
+      containers:
+        - name: worker
+          env:
+            - {name: AECONTROL_SANDBOX_BACKEND, value: kubernetes-runtimeclass}
+            - name: AECONTROL_SANDBOX_KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef: {fieldPath: metadata.namespace}
+            - {name: AECONTROL_SANDBOX_KUBERNETES_RUNTIME_CLASS, value: kata-qemu}
+            - {name: AECONTROL_SANDBOX_KUBERNETES_RUNTIME_HANDLER, value: kata-qemu}
+            - name: AECONTROL_SANDBOX_IMAGE
+              value: docker.io/library/python@sha256:REPLACE_WITH_64_HEX_DIGEST
+            - {name: AECONTROL_SANDBOX_KUBERNETES_STARTUP_TIMEOUT_SECONDS, value: "30"}

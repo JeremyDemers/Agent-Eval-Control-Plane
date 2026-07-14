@@ -423,6 +423,13 @@ def _executor_from_environment() -> TestExecutor:
             seccomp_profile=configuration.seccomp_profile,
             apparmor_profile=configuration.apparmor_profile,
         )
+    if backend == "kubernetes-runtimeclass":
+        from aecontrol.kubernetes_sandbox import (
+            KubernetesJobTestExecutor,
+            kubernetes_sandbox_configuration_from_environment,
+        )
+
+        return KubernetesJobTestExecutor(kubernetes_sandbox_configuration_from_environment())
     raise ValueError(f"unknown sandbox backend: {backend}")
 
 

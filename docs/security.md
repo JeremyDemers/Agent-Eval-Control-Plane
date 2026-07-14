@@ -10,6 +10,13 @@ Linux capabilities, `no-new-privileges`, an unprivileged UID, and container memo
 limits. Podman applies its runtime-default seccomp profile unless an operator supplies a custom one.
 Select the backend with `AECONTROL_SANDBOX_BACKEND=podman`; each run records the selected backend.
 
+For actively hostile candidate code, `AECONTROL_SANDBOX_BACKEND=kubernetes-runtimeclass` creates one
+Kubernetes Job per test under a name-and-handler-pinned Kata RuntimeClass. Every candidate gets a
+separate guest kernel, immutable source ConfigMap, deny-all NetworkPolicy, digest-pinned image,
+disabled service-account token, read-only root filesystem, non-root identity, dropped capabilities,
+seccomp, fixed resources, and bounded deadlines. Foreground cleanup keeps network denial in place
+until the pod is gone. See [`kata-sandbox.md`](kata-sandbox.md).
+
 ## Production Container Policy
 
 Production workers can fail closed unless the sandbox image uses an exact SHA-256 repository digest:
@@ -41,10 +48,11 @@ with Python and the container runtime. `aecontrol doctor` reports whether digest
 and whether runtime-default or custom policies are active.
 
 Static validation is defense in depth, not a proof of safety. The process backend shares the host
-kernel and should only be used for trusted deterministic fixtures. Model-generated or third-party code
-should use the Podman backend. A production deployment should additionally use a dedicated worker
-node and stronger VM or microVM isolation when candidate code is actively hostile. Containers share
-the host kernel even with digest, namespace, capability, seccomp, and AppArmor controls.
+process boundary and should only be used for trusted deterministic fixtures. Podman remains suitable
+for lower-risk model-generated code but shares the host kernel even with digest, namespace,
+capability, seccomp, and AppArmor controls. Actively hostile code should use the Kata backend on
+dedicated, patched nodes with enforced admission and CNI policy. Cluster administrators, node root,
+the hypervisor, Kata guest stack, RuntimeClass, admission controller, and CNI remain trusted.
 
 The API binds to `127.0.0.1` by default and assumes a trusted local operator. Evaluation requests
 accept local suite and policy paths, so the service must not be exposed to untrusted networks in this
@@ -116,7 +124,7 @@ prevent a compromised authorized workload from requesting signatures. See
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.51.0
+development-only tools so its result describes the shipped runtime environment. The v0.52.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults
