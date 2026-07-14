@@ -47,3 +47,7 @@ W3C trace context is persisted with queued work, allowing the API server span an
 consumer span to remain in one trace. A process-local backend keeps JSON logging as the default and
 can activate a batched OpenTelemetry OTLP/HTTP exporter entirely through standard environment
 configuration.
+
+Authentication accepts opaque AgentEval keys or issuer-signed JWTs through one authorization path.
+Federation verifies keys and claims before constructing the same tenant-bound `Principal` used by
+API keys, so endpoint scope dependencies and PostgreSQL context are shared rather than duplicated.

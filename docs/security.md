@@ -79,6 +79,12 @@ transaction advisory lock with the state transition, preventing concurrent repli
 configured limits. Quotas govern control-plane admission; they do not replace NVIDIA device
 isolation or terminate work already holding a lease. See [`tenant-quotas.md`](tenant-quotas.md).
 
+OIDC access tokens use an explicit asymmetric algorithm allowlist and require signature, issuer,
+audience, expiry, issued-at, subject, tenant, and namespaced scope validation. Unknown algorithms are
+rejected before JWKS retrieval; fetches and caches are bounded. Federated subjects are pseudonymized,
+the tenant status check remains fail closed, and `operator` authority is never accepted from JWT
+claims. See [`identity-federation.md`](identity-federation.md).
+
 ## Evidence Boundary
 
 Ed25519 signatures let independent auditors verify artifacts without private signing authority.
@@ -105,7 +111,7 @@ host-administrator control. See [`evidence-checkpoints.md`](evidence-checkpoints
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.43.0
+development-only tools so its result describes the shipped runtime environment. The v0.44.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults

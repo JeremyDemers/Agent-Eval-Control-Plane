@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import os
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -12,7 +14,17 @@ from fastapi import HTTPException, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from aecontrol.tenancy import DEFAULT_TENANT_ID, TENANT_ID_PATTERN, bind_tenant, default_tenant_id
+from aecontrol.federation import (
+    FederatedTokenVerifier,
+    FederationError,
+    OIDCFederatedTokenVerifier,
+)
+from aecontrol.tenancy import (
+    DEFAULT_TENANT_ID,
+    TENANT_ID_PATTERN,
+    bind_tenant,
+    default_tenant_id,
+)
 from aecontrol.tenants import ResolvedTenantAPIKey
 
 AuthScope = Literal["read", "write", "admin", "operator"]
@@ -47,8 +59,8 @@ class Principal(BaseModel):
 
 bearer_scheme = HTTPBearer(
     scheme_name="ControlPlaneAPIKey",
-    description="Scoped API key issued by the AgentEval control-plane operator.",
-    bearerFormat="API key",
+    description="Scoped AgentEval API key or configured OIDC access token.",
+    bearerFormat="API key or JWT",
     auto_error=False,
 )
 
@@ -78,16 +90,22 @@ class Authenticator:
         *,
         credential_lookup: Callable[[str], ResolvedTenantAPIKey | None] | None = None,
         tenant_access_allowed: Callable[[str], bool] | None = None,
+        federated_token_verifier: FederatedTokenVerifier | None = None,
     ) -> None:
         resolved = config_path or os.getenv("AECONTROL_AUTH_CONFIG")
         self.config_path = Path(resolved) if resolved else None
         self.config = load_auth_config(self.config_path) if self.config_path else None
         self.credential_lookup = credential_lookup
         self.tenant_access_allowed = tenant_access_allowed
+        self.federated_token_verifier = (
+            federated_token_verifier
+            if federated_token_verifier is not None
+            else OIDCFederatedTokenVerifier.from_environment()
+        )
 
     @property
     def enabled(self) -> bool:
-        return self.config is not None
+        return self.config is not None or self.federated_token_verifier is not None
 
     def require(self, scope: AuthScope) -> Callable[..., Awaitable[Principal]]:
         async def authenticate(
@@ -96,7 +114,7 @@ class Authenticator:
                 HTTPAuthorizationCredentials | None, Security(bearer_scheme)
             ] = None,
         ) -> Principal:
-            if self.config is None:
+            if not self.enabled:
                 principal = Principal(
                     key_id="local-trust", tenant_id=default_tenant_id(), scopes={"admin"}
                 )
@@ -106,23 +124,34 @@ class Authenticator:
             if credentials is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="API key is required",
+                    detail="Bearer credential is required",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             candidate = hash_api_key(credentials.credentials)
             key = next(
                 (
                     configured
-                    for configured in self.config.keys
+                    for configured in (self.config.keys if self.config is not None else [])
                     if hmac.compare_digest(configured.secret_sha256, candidate)
                 ),
                 None,
             )
             resolved_key = self.credential_lookup(candidate) if self.credential_lookup else None
-            if key is None and resolved_key is None:
+            federated_identity = None
+            if (
+                key is None
+                and resolved_key is None
+                and self.federated_token_verifier is not None
+                and credentials.credentials.count(".") == 2
+            ):
+                with suppress(FederationError):
+                    federated_identity = await asyncio.to_thread(
+                        self.federated_token_verifier.verify, credentials.credentials
+                    )
+            if key is None and resolved_key is None and federated_identity is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="API key is invalid",
+                    detail="Bearer credential is invalid",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             if key is not None:
@@ -136,19 +165,32 @@ class Authenticator:
                 ):
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="API key is invalid",
+                        detail="Bearer credential is invalid",
                         headers={"WWW-Authenticate": "Bearer"},
                     )
-            else:
+            elif resolved_key is not None:
                 assert resolved_key is not None
                 tenant_id = resolved_key.tenant_id
                 key_id = resolved_key.key_id
                 scopes = set(resolved_key.scopes)
+            else:
+                assert federated_identity is not None
+                tenant_id = federated_identity.tenant_id
+                key_id = federated_identity.principal_id
+                scopes = set(federated_identity.scopes)
+                if self.tenant_access_allowed is not None and not self.tenant_access_allowed(
+                    tenant_id
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Bearer credential is invalid",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
             authorized = scope in scopes or (scope != "operator" and "admin" in scopes)
             if not authorized:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"API key requires the {scope} scope",
+                    detail=f"Bearer credential requires the {scope} scope",
                 )
             principal = Principal(key_id=key_id, tenant_id=tenant_id, scopes=scopes)
             bind_tenant(principal.tenant_id)

@@ -66,7 +66,8 @@ operators need global lifecycle inventory. They are reachable through applicatio
 credentials therefore remain a trusted operator asset and should be isolated from tenant workloads.
 
 Schema v17 adds resource quotas through a separate operator-owned policy table; see
-[`tenant-quotas.md`](tenant-quotas.md). The registry does not provide billing, invitation workflows,
-OIDC federation, or automatic worker-pool provisioning. Production deployments should keep the
+[`tenant-quotas.md`](tenant-quotas.md). OIDC federation can authenticate registered tenants but does
+not change lifecycle ownership; see [`identity-federation.md`](identity-federation.md). The registry
+does not provide billing, invitation workflows, or automatic worker-pool provisioning. Production deployments should keep the
 bootstrap operator key in a secret manager, rotate it through configuration rollout, terminate TLS
 before the API, and audit operator requests through the structured key ID and request ID logs.

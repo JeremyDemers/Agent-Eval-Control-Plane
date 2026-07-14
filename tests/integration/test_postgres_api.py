@@ -18,6 +18,7 @@ from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key
 from aecontrol.checkpoints import FileCheckpointSink, SignedLedgerCheckpoint, verify_checkpoint
 from aecontrol.database import DatabaseRuntimeConfiguration
+from aecontrol.federation import FederatedIdentity, FederationError
 from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig, GuardrailsError
 from aecontrol.integrity import ED25519, HMAC_SHA256, ArtifactKeyring, generate_ed25519_keypair
 from aecontrol.jobs import EvaluationWorker
@@ -147,11 +148,11 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
             missing = client.get("/api/v1/runs")
             assert missing.status_code == 401
             assert missing.headers["www-authenticate"] == "Bearer"
-            assert missing.json() == {"detail": "API key is required"}
+            assert missing.json() == {"detail": "Bearer credential is required"}
 
             invalid = client.get("/api/v1/runs", headers={"Authorization": "Bearer wrong-secret"})
             assert invalid.status_code == 401
-            assert invalid.json() == {"detail": "API key is invalid"}
+            assert invalid.json() == {"detail": "Bearer credential is invalid"}
 
             observer_headers = {"Authorization": "Bearer read-secret"}
             observed = client.get("/api/v1/runs", headers=observer_headers)
@@ -166,7 +167,7 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
                 },
             )
             assert forbidden.status_code == 403
-            assert forbidden.json() == {"detail": "API key requires the write scope"}
+            assert forbidden.json() == {"detail": "Bearer credential requires the write scope"}
 
             operator_headers = {"Authorization": "Bearer write-secret"}
             queued = client.post(
@@ -189,7 +190,9 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
                 },
             )
             assert forbidden_config.status_code == 403
-            assert forbidden_config.json() == {"detail": "API key requires the admin scope"}
+            assert forbidden_config.json() == {
+                "detail": "Bearer credential requires the admin scope"
+            }
 
             admin_config = client.post(
                 "/api/v1/guardrails/config-versions",
@@ -205,6 +208,141 @@ def test_scoped_api_key_authentication(database_url: str, tmp_path) -> None:  # 
 
             security = client.get("/openapi.json").json()["components"]["securitySchemes"]
             assert security["ControlPlaneAPIKey"]["scheme"] == "bearer"
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
+def test_oidc_federation_preserves_tenant_scope_and_suspension(database_url: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    schema = f"test_{uuid4().hex}"
+    auth_config = tmp_path / "federation-auth.yaml"
+    auth_config.write_text(
+        "keys:\n"
+        f"  - key_id: platform-operator\n    tenant_id: control-plane\n"
+        f"    secret_sha256: {hash_api_key('operator-secret')}\n    scopes: [operator]\n"
+    )
+    identities = {
+        "read.token.signature": FederatedIdentity(
+            principal_id="oidc:" + "a" * 20,
+            tenant_id="research",
+            scopes={"read"},
+        ),
+        "admin.token.signature": FederatedIdentity(
+            principal_id="oidc:" + "b" * 20,
+            tenant_id="research",
+            scopes={"admin"},
+        ),
+    }
+
+    class Verifier:
+        def verify(self, token: str) -> FederatedIdentity:
+            try:
+                return identities[token]
+            except KeyError as error:
+                raise FederationError("invalid token") from error
+
+    operator = {"Authorization": "Bearer operator-secret"}
+    reader = {"Authorization": "Bearer read.token.signature"}
+    administrator = {"Authorization": "Bearer admin.token.signature"}
+    try:
+        with TestClient(
+            create_app(
+                database_url,
+                schema=schema,
+                auth_config=auth_config,
+                federated_token_verifier=Verifier(),
+            )
+        ) as client:
+            created = client.post(
+                "/api/v1/platform/tenants",
+                headers=operator,
+                json={"tenant_id": "research", "display_name": "Federated Research"},
+            )
+            assert created.status_code == 201
+
+            observed = client.get("/api/v1/runs", headers=reader)
+            assert observed.status_code == 200
+            assert observed.headers["x-aecontrol-tenant"] == "research"
+            assert (
+                client.post(
+                    "/api/v1/jobs",
+                    headers=reader,
+                    json={
+                        "suite_path": "examples/suites/coding_repair.yaml",
+                        "agent_version": "baseline",
+                    },
+                ).status_code
+                == 403
+            )
+            assert client.get("/api/v1/tenant/quota", headers=administrator).status_code == 200
+            assert client.get("/api/v1/platform/tenants", headers=administrator).status_code == 403
+
+            registered = client.post(
+                "/api/v1/guardrails/config-versions",
+                headers=administrator,
+                json={
+                    "config_id": "federated-safety",
+                    "version": "1.0.0",
+                    "bundle_sha256": "a" * 64,
+                },
+            )
+            assert registered.status_code == 201
+            assert registered.json()["created_by"] == "oidc:" + "b" * 20
+
+            invalid = client.get(
+                "/api/v1/runs", headers={"Authorization": "Bearer bad.token.signature"}
+            )
+            assert invalid.status_code == 401
+            assert invalid.json() == {"detail": "Bearer credential is invalid"}
+
+            suspended = client.patch(
+                "/api/v1/platform/tenants/research",
+                headers=operator,
+                json={"status": "suspended"},
+            )
+            assert suspended.status_code == 200
+            assert client.get("/api/v1/runs", headers=reader).status_code == 401
+            assert client.get("/api/v1/runs", headers=administrator).status_code == 401
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
+def test_oidc_federation_can_enable_authentication_without_key_config(database_url: str) -> None:
+    schema = f"test_{uuid4().hex}"
+
+    class Verifier:
+        def verify(self, token: str) -> FederatedIdentity:
+            if token != "valid.token.signature":
+                raise FederationError("invalid token")
+            return FederatedIdentity(
+                principal_id="oidc:" + "c" * 20,
+                tenant_id="default",
+                scopes={"read"},
+            )
+
+    try:
+        with TestClient(
+            create_app(database_url, schema=schema, federated_token_verifier=Verifier())
+        ) as client:
+            assert client.get("/api/v1/runs").status_code == 401
+            accepted = client.get(
+                "/api/v1/runs",
+                headers={"Authorization": "Bearer valid.token.signature"},
+            )
+            assert accepted.status_code == 200
+            assert accepted.headers["x-aecontrol-tenant"] == "default"
+            assert (
+                client.get(
+                    "/api/v1/runs",
+                    headers={"Authorization": "Bearer opaque-invalid-key"},
+                ).status_code
+                == 401
+            )
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(

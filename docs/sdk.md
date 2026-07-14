@@ -67,5 +67,9 @@ normalizes structured API and connection failures into `AgentEvalAPIError`, and 
 or unexpected response shapes. Tests inject the transport protocol, allowing deterministic lifecycle
 and timeout checks without a network server.
 
+For OIDC, pass the short-lived JWT access token through `api_key=` or `AECONTROL_API_KEY`; no SDK
+transport change is required. Token acquisition and refresh remain the identity provider client's
+responsibility. See [`identity-federation.md`](identity-federation.md).
+
 Run `make sdk-demo` to launch a temporary local service, execute the four-slice baseline through the
 SDK, print the typed result summary, and shut the temporary service down.

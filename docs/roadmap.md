@@ -45,10 +45,11 @@ Implemented ahead of the original four-day scope:
 - Self-service tenant lifecycle with isolated operator scope, key rotation, and suspension
 - Ed25519 ledger checkpoints with S3 Object Lock compliance retention and rollback detection
 - Atomic per-tenant queue, submission-rate, execution, and CUDA concurrency quotas
+- OIDC JWT federation with bounded JWKS rotation and tenant/scope claim enforcement
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
 - Automated scheduled restore drills and cross-region PostgreSQL replica promotion
 - Additional hosted provider authentication and endpoint-specific adapters
-- Identity federation, cross-region evidence replication, and remote KMS signing adapters
+- Cross-region evidence replication and remote KMS signing adapters

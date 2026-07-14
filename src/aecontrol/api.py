@@ -35,6 +35,7 @@ from aecontrol.database import (
     database_configuration_from_environment,
 )
 from aecontrol.engine import EvaluationEngine, load_suite
+from aecontrol.federation import FederatedTokenVerifier
 from aecontrol.gate import evaluate_gate, load_policy
 from aecontrol.guardrails import (
     ExpectedGuardrailAction,
@@ -177,6 +178,7 @@ def create_app(
     artifact_keyring: ArtifactKeyring | None = None,
     database_config: DatabaseRuntimeConfiguration | None = None,
     checkpoint_sink: CheckpointSink | None = None,
+    federated_token_verifier: FederatedTokenVerifier | None = None,
 ) -> FastAPI:
     resolved_database_url = database_url or os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
     resolved_input_root = Path(
@@ -197,6 +199,7 @@ def create_app(
         auth_config,
         credential_lookup=store.resolve_tenant_api_key,
         tenant_access_allowed=store.tenant_access_allowed,
+        federated_token_verifier=federated_token_verifier,
     )
     require_read = authenticator.require("read")
     require_write = authenticator.require("write")

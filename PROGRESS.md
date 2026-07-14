@@ -93,6 +93,8 @@
   idempotent publication, and privileged rollback detection.
 - Operator-managed tenant queue, rolling submission-rate, execution, and CUDA lease quotas with
   atomic multi-replica enforcement and tenant-visible usage.
+- OIDC JWT federation with mandatory issuer/audience/expiry checks, bounded JWKS caching, namespaced
+  tenant scopes, pseudonymous audit attribution, and static-only platform operator authority.
 
 ## Verification
 
@@ -116,5 +118,5 @@
 - Local temporary workspaces are not a hardened sandbox for untrusted code.
 - Docker-compatible Makefile targets default to `podman` locally. Set `CONTAINER_ENGINE=docker` on hosts with a healthy Docker daemon.
 - The browser explorer remains local-trust; durable workers are implemented, but production process supervision is deferred.
-- VM-grade worker isolation, automated restore drills, remote KMS signing, identity federation,
-  cross-region evidence replication, and additional hosted providers remain on the roadmap.
+- VM-grade worker isolation, automated restore drills, remote KMS signing, cross-region evidence
+  replication, and additional hosted providers remain on the roadmap.

@@ -53,6 +53,28 @@ def test_doctor_reports_sanitized_telemetry_destination(monkeypatch) -> None:  #
     assert "collector-secret" not in result.output
 
 
+def test_auth_federation_diagnostics_are_sanitized(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv(
+        "AECONTROL_OIDC_ISSUER", "https://issuer-user:issuer-secret@identity.example/agents"
+    )
+    monkeypatch.setenv("AECONTROL_OIDC_AUDIENCE", "aecontrol-api,aecontrol-workers")
+    monkeypatch.setenv("AECONTROL_OIDC_JWKS_URL", "https://identity.example/agents/jwks")
+
+    invalid = CliRunner().invoke(app, ["auth", "federation"])
+    assert invalid.exit_code != 0
+    assert "must not include credentials" in invalid.output
+    assert "issuer-secret" not in invalid.output
+
+    monkeypatch.setenv("AECONTROL_OIDC_ISSUER", "https://identity.example/agents")
+    valid = CliRunner().invoke(app, ["auth", "federation"])
+    assert valid.exit_code == 0
+    assert "identity federation: valid" in valid.output
+    assert "issuer host: identity.example" in valid.output
+    assert "JWKS host: identity.example" in valid.output
+    assert "audiences: 2" in valid.output
+    assert "aecontrol-api" not in valid.output
+
+
 def test_tenant_quota_cli_sets_policy_and_reports_usage(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     now = datetime.now(UTC)
     stored = TenantQuotaRecord(

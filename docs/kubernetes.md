@@ -29,9 +29,22 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.43.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.44.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
+
+OIDC federation is configured on API pods with non-secret issuer metadata. Keep the static operator
+credential in the existing authentication Secret; federated tokens cannot replace bootstrap control:
+
+```bash
+kubectl -n aecontrol set env deployment/api \
+  AECONTROL_OIDC_ISSUER=https://identity.example/realms/agents \
+  AECONTROL_OIDC_AUDIENCE=aecontrol-api \
+  AECONTROL_OIDC_JWKS_URL=https://identity.example/realms/agents/protocol/openid-connect/certs
+```
+
+Use an egress policy that permits HTTPS only to the configured JWKS host. See
+[`identity-federation.md`](identity-federation.md).
 
 For retention-locked checkpoints, bind the API service account to an IAM role and inject only the
 bucket location; boto3 obtains short-lived workload credentials through its standard provider chain:

@@ -3,6 +3,7 @@
 from aecontrol.checkpoints import CheckpointPublication, SignedLedgerCheckpoint
 from aecontrol.compare import compare_runs
 from aecontrol.engine import EvaluationEngine
+from aecontrol.federation import FederatedIdentity, OIDCFederationConfiguration
 from aecontrol.gate import evaluate_gate
 from aecontrol.guardrails import (
     ExpectedGuardrailAction,
@@ -37,6 +38,7 @@ __all__ = [
     "CheckpointPublication",
     "EvaluationEngine",
     "ExpectedGuardrailAction",
+    "FederatedIdentity",
     "GuardrailConfigActivation",
     "GuardrailConfigVersion",
     "GuardrailEfficacyMetrics",
@@ -48,6 +50,7 @@ __all__ = [
     "LangGraphOutputMapping",
     "LangGraphRuntimeAdapter",
     "NIMClient",
+    "OIDCFederationConfiguration",
     "SignedLedgerCheckpoint",
     "StoredGuardrailEvidence",
     "TenantAPIKeyRecord",

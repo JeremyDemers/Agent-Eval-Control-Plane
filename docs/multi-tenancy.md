@@ -61,5 +61,8 @@ atomic tenant provisioning, suspension, reactivation, self-service key rotation,
 inventory. The lifecycle and credential tables deliberately sit outside tenant RLS because identity
 must be resolved before tenant context exists; only operator and tenant-admin API methods expose them.
 See [`tenant-lifecycle.md`](tenant-lifecycle.md) for that database trust boundary. Schema v17 adds
-queue and execution quotas; see [`tenant-quotas.md`](tenant-quotas.md). Billing, OIDC federation,
-automatic worker provisioning, and cross-tenant analytics remain outside the current boundary.
+queue and execution quotas; see [`tenant-quotas.md`](tenant-quotas.md). Billing, automatic worker
+provisioning, and cross-tenant analytics remain outside the current boundary.
+
+Federated JWTs bind the validated tenant claim into this same transaction context; they do not add a
+second authorization path around RLS. See [`identity-federation.md`](identity-federation.md).

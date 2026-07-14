@@ -11,6 +11,7 @@ import socket
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 from uuid import UUID
 
 import typer
@@ -26,6 +27,7 @@ from aecontrol.database import database_configuration_from_environment
 from aecontrol.datasets import validate_jsonl_dataset
 from aecontrol.dcgm import dcgm_configuration_from_environment
 from aecontrol.engine import EvaluationEngine, load_suite
+from aecontrol.federation import oidc_configuration_from_environment
 from aecontrol.gate import evaluate_gate, load_policy
 from aecontrol.guardrails import GuardrailsClient, GuardrailsError, guardrail_bundle_digest
 from aecontrol.hardware import detect_worker_capabilities
@@ -104,6 +106,14 @@ def doctor() -> None:
         console.print("database: direct")
     console.print(f"database migration lock: {database.migration_lock_timeout_seconds:g}s")
     console.print(f"tenant: {default_tenant_id()}")
+    federation = oidc_configuration_from_environment()
+    if federation is None:
+        console.print("identity federation: disabled")
+    else:
+        console.print(
+            f"identity federation: enabled issuer={federation.issuer_host} "
+            f"algorithms={','.join(federation.algorithms)}"
+        )
     dcgm = dcgm_configuration_from_environment()
     dcgm_detail = (
         f"enabled host={dcgm.endpoint_host} timeout={dcgm.timeout_seconds:g}s pod={dcgm.pod_name}"
@@ -134,6 +144,24 @@ def auth_validate(config: Path) -> None:
     auth_config = load_auth_config(config)
     tenants = len({key.tenant_id for key in auth_config.keys})
     console.print(f"[green]valid[/green] {config} keys={len(auth_config.keys)} tenants={tenants}")
+
+
+@auth_app.command("federation")
+def auth_federation() -> None:
+    """Validate OIDC environment configuration without contacting the identity provider."""
+    try:
+        configuration = oidc_configuration_from_environment()
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    if configuration is None:
+        console.print("identity federation: disabled")
+        return
+    jwks_host = urlparse(configuration.jwks_url).hostname
+    console.print("[green]identity federation: valid[/green]")
+    console.print(f"issuer host: {configuration.issuer_host}")
+    console.print(f"JWKS host: {jwks_host}")
+    console.print(f"audiences: {len(configuration.audiences)}")
+    console.print(f"algorithms: {','.join(configuration.algorithms)}")
 
 
 @tenant_app.command("quota-set")
