@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from aecontrol.tenancy import (
     DEFAULT_TENANT_ID,
@@ -10,6 +11,7 @@ from aecontrol.tenancy import (
     reset_tenant,
     validate_tenant_id,
 )
+from aecontrol.tenants import TenantQuotaExceededError, TenantQuotaLimits
 
 
 def test_tenant_ids_are_bounded_slugs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -32,3 +34,14 @@ def test_tenant_binding_is_context_local() -> None:
     finally:
         reset_tenant(token)
     assert current_tenant_id() == original
+
+
+def test_tenant_quota_limits_are_bounded_and_consistent() -> None:
+    assert TenantQuotaLimits(max_running_jobs=0, max_running_cuda_jobs=0).max_running_jobs == 0
+    with pytest.raises(ValidationError, match="cannot exceed"):
+        TenantQuotaLimits(max_running_jobs=1, max_running_cuda_jobs=2)
+    with pytest.raises(ValidationError):
+        TenantQuotaLimits(max_queued_jobs=100_001)
+
+    error = TenantQuotaExceededError("max_queued_jobs", 10, 11)
+    assert (error.quota, error.limit, error.observed) == ("max_queued_jobs", 10, 11)

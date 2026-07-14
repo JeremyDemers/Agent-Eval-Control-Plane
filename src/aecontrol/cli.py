@@ -44,6 +44,7 @@ from aecontrol.telemetry import (
     telemetry_configuration_from_environment,
 )
 from aecontrol.tenancy import default_tenant_id
+from aecontrol.tenants import TenantQuotaLimits
 
 app = typer.Typer(help="AgentEval Control Plane CLI")
 datasets_app = typer.Typer(help="Dataset commands")
@@ -57,6 +58,7 @@ openai_app = typer.Typer(help="OpenAI-compatible provider commands")
 nim_app = typer.Typer(help="NVIDIA NIM provider commands")
 guardrails_app = typer.Typer(help="NVIDIA NeMo Guardrails commands")
 auth_app = typer.Typer(help="API authentication commands")
+tenant_app = typer.Typer(help="Tenant resource-governance commands")
 app.add_typer(datasets_app, name="datasets")
 app.add_typer(suites_app, name="suites")
 app.add_typer(plugins_app, name="plugins")
@@ -68,6 +70,7 @@ app.add_typer(openai_app, name="openai")
 app.add_typer(nim_app, name="nim")
 app.add_typer(guardrails_app, name="guardrails")
 app.add_typer(auth_app, name="auth")
+app.add_typer(tenant_app, name="tenant")
 console = Console()
 
 
@@ -131,6 +134,64 @@ def auth_validate(config: Path) -> None:
     auth_config = load_auth_config(config)
     tenants = len({key.tenant_id for key in auth_config.keys})
     console.print(f"[green]valid[/green] {config} keys={len(auth_config.keys)} tenants={tenants}")
+
+
+@tenant_app.command("quota-set")
+def tenant_quota_set(
+    tenant_id: str = typer.Argument(...),
+    max_queued_jobs: int | None = typer.Option(None, min=0),
+    max_jobs_per_hour: int | None = typer.Option(None, min=0),
+    max_running_jobs: int | None = typer.Option(None, min=0),
+    max_running_cuda_jobs: int | None = typer.Option(None, min=0),
+    updated_by: str = typer.Option("cli-operator", "--updated-by"),
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Replace a registered tenant's quota policy; omitted limits are unlimited."""
+    try:
+        quota = TenantQuotaLimits(
+            max_queued_jobs=max_queued_jobs,
+            max_jobs_per_hour=max_jobs_per_hour,
+            max_running_jobs=max_running_jobs,
+            max_running_cuda_jobs=max_running_cuda_jobs,
+        )
+        stored = ArtifactStore(database_url).set_tenant_quota(
+            tenant_id, quota, updated_by=updated_by
+        )
+    except (KeyError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    if json_output:
+        console.print(stored.model_dump_json(indent=2))
+        return
+    console.print(f"tenant quota updated: {stored.tenant_id}")
+    console.print(
+        f"queued={stored.max_queued_jobs} hourly={stored.max_jobs_per_hour} "
+        f"running={stored.max_running_jobs} cuda={stored.max_running_cuda_jobs}"
+    )
+
+
+@tenant_app.command("quota-status")
+def tenant_quota_status(
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Show policy and live usage for the tenant selected by AECONTROL_TENANT_ID."""
+    try:
+        quota_status = ArtifactStore(database_url).tenant_quota_status()
+    except KeyError as error:
+        raise typer.BadParameter(f"tenant was not found: {error.args[0]}") from error
+    if json_output:
+        console.print(quota_status.model_dump_json(indent=2))
+        return
+    quota = quota_status.quota
+    usage = quota_status.usage
+    console.print(f"tenant quota: {quota.tenant_id}")
+    console.print(
+        f"queued={usage.queued_jobs}/{quota.max_queued_jobs} "
+        f"hourly={usage.jobs_submitted_last_hour}/{quota.max_jobs_per_hour} "
+        f"running={usage.active_running_jobs}/{quota.max_running_jobs} "
+        f"cuda={usage.active_running_cuda_jobs}/{quota.max_running_cuda_jobs}"
+    )
 
 
 @datasets_app.command("validate")

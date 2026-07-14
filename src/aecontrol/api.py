@@ -80,6 +80,10 @@ from aecontrol.tenants import (
     LastTenantAdminError,
     TenantAPIKeyRecord,
     TenantConflictError,
+    TenantQuotaExceededError,
+    TenantQuotaLimits,
+    TenantQuotaRecord,
+    TenantQuotaStatus,
     TenantRecord,
     TenantScope,
     TenantStatus,
@@ -428,6 +432,40 @@ def create_app(
             raise HTTPException(status_code=404, detail="tenant was not found") from error
 
     @application.get(
+        "/api/v1/platform/tenants/{tenant_id}/quota",
+        response_model=TenantQuotaRecord,
+        tags=["tenants"],
+    )
+    async def get_tenant_quota(
+        tenant_id: str,
+        _principal: Principal = Depends(require_operator),
+    ) -> TenantQuotaRecord:
+        try:
+            return await asyncio.to_thread(store.get_tenant_quota, tenant_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="tenant was not found") from error
+
+    @application.put(
+        "/api/v1/platform/tenants/{tenant_id}/quota",
+        response_model=TenantQuotaRecord,
+        tags=["tenants"],
+    )
+    async def set_tenant_quota(
+        tenant_id: str,
+        request: TenantQuotaLimits,
+        principal: Principal = Depends(require_operator),
+    ) -> TenantQuotaRecord:
+        try:
+            return await asyncio.to_thread(
+                store.set_tenant_quota,
+                tenant_id,
+                request,
+                updated_by=principal.key_id,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="tenant was not found") from error
+
+    @application.get(
         "/api/v1/tenant",
         response_model=TenantRecord,
         tags=["tenants"],
@@ -437,6 +475,19 @@ def create_app(
     ) -> TenantRecord:
         try:
             return await asyncio.to_thread(store.get_tenant, principal.tenant_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="tenant was not found") from error
+
+    @application.get(
+        "/api/v1/tenant/quota",
+        response_model=TenantQuotaStatus,
+        tags=["tenants"],
+    )
+    async def get_current_tenant_quota(
+        _principal: Principal = Depends(require_read),
+    ) -> TenantQuotaStatus:
+        try:
+            return await asyncio.to_thread(store.tenant_quota_status)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="tenant was not found") from error
 
@@ -734,6 +785,16 @@ def create_app(
                 traceparent=http_request.state.traceparent,
                 request_id=http_request.state.request_id,
             )
+        except TenantQuotaExceededError as error:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "code": "tenant_quota_exceeded",
+                    "quota": error.quota,
+                    "limit": error.limit,
+                    "observed": error.observed,
+                },
+            ) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 

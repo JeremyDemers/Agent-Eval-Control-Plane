@@ -60,6 +60,6 @@ deployment's `AECONTROL_TENANT_ID`; they are not cross-tenant aggregate views. S
 atomic tenant provisioning, suspension, reactivation, self-service key rotation, and global lifecycle
 inventory. The lifecycle and credential tables deliberately sit outside tenant RLS because identity
 must be resolved before tenant context exists; only operator and tenant-admin API methods expose them.
-See [`tenant-lifecycle.md`](tenant-lifecycle.md) for that database trust boundary. Quotas, billing,
-OIDC federation, automatic worker provisioning, and cross-tenant analytics remain outside the current
-boundary.
+See [`tenant-lifecycle.md`](tenant-lifecycle.md) for that database trust boundary. Schema v17 adds
+queue and execution quotas; see [`tenant-quotas.md`](tenant-quotas.md). Billing, OIDC federation,
+automatic worker provisioning, and cross-tenant analytics remain outside the current boundary.

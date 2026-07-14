@@ -32,6 +32,11 @@ from aecontrol.models import (
     GpuQueueJobForecast,
 )
 from aecontrol.openai_compatible import CompatibleModel
+from aecontrol.tenants import (
+    TenantQuotaRecord,
+    TenantQuotaStatus,
+    TenantQuotaUsage,
+)
 
 
 def test_doctor_reports_sanitized_telemetry_destination(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -46,6 +51,69 @@ def test_doctor_reports_sanitized_telemetry_destination(monkeypatch) -> None:  #
     assert "telemetry: otlp/http host=traces.example" in result.output
     assert "collector-user" not in result.output
     assert "collector-secret" not in result.output
+
+
+def test_tenant_quota_cli_sets_policy_and_reports_usage(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    now = datetime.now(UTC)
+    stored = TenantQuotaRecord(
+        tenant_id="research",
+        max_queued_jobs=12,
+        max_jobs_per_hour=60,
+        max_running_jobs=4,
+        max_running_cuda_jobs=2,
+        updated_at=now,
+        updated_by="portfolio-demo",
+    )
+    quota_status = TenantQuotaStatus(
+        quota=stored,
+        usage=TenantQuotaUsage(
+            queued_jobs=3,
+            active_running_jobs=2,
+            active_running_cuda_jobs=1,
+            jobs_submitted_last_hour=9,
+            measured_at=now,
+            submission_window_started_at=now - timedelta(hours=1),
+        ),
+    )
+    observed = {}
+
+    class Store:
+        def __init__(self, _database_url: str) -> None:
+            pass
+
+        def set_tenant_quota(self, tenant_id, quota, *, updated_by):  # type: ignore[no-untyped-def]
+            observed.update(tenant_id=tenant_id, quota=quota, updated_by=updated_by)
+            return stored
+
+        def tenant_quota_status(self):  # type: ignore[no-untyped-def]
+            return quota_status
+
+    monkeypatch.setattr("aecontrol.cli.ArtifactStore", Store)
+    configured = CliRunner().invoke(
+        app,
+        [
+            "tenant",
+            "quota-set",
+            "research",
+            "--max-queued-jobs",
+            "12",
+            "--max-jobs-per-hour",
+            "60",
+            "--max-running-jobs",
+            "4",
+            "--max-running-cuda-jobs",
+            "2",
+            "--updated-by",
+            "portfolio-demo",
+        ],
+    )
+    assert configured.exit_code == 0
+    assert "tenant quota updated: research" in configured.output
+    assert observed["updated_by"] == "portfolio-demo"
+
+    status = CliRunner().invoke(app, ["tenant", "quota-status"])
+    assert status.exit_code == 0
+    assert "queued=3/12 hourly=9/60 running=2/4 cuda=1/2" in status.output
 
 
 def test_doctor_reports_hardened_podman_configuration(monkeypatch) -> None:  # type: ignore[no-untyped-def]

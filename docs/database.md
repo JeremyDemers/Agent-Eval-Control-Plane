@@ -47,6 +47,10 @@ initializer fails startup instead of serving against a partially upgraded schema
 coordinates AgentEval processes that follow this contract; external DDL tools must still be scheduled
 and controlled by the operator.
 
+Schema v17 also uses tenant-specific transaction advisory locks for queue and execution quota
+admission. Those locks are independent of the schema migration lock and serialize only submissions
+and worker claims for the same tenant. See [`tenant-quotas.md`](tenant-quotas.md).
+
 ## Monitoring
 
 When pooling is active, `/metrics` exports:

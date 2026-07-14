@@ -76,13 +76,18 @@ from aecontrol.tenants import (
     ResolvedTenantAPIKey,
     TenantAPIKeyRecord,
     TenantConflictError,
+    TenantQuotaExceededError,
+    TenantQuotaLimits,
+    TenantQuotaRecord,
+    TenantQuotaStatus,
+    TenantQuotaUsage,
     TenantRecord,
     TenantScope,
     TenantStatus,
     TenantSuspendedError,
 )
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 SIGNED_ARTIFACT_TABLES = ("evaluation_runs", "comparisons", "guardrail_evidence")
 TENANT_TABLES = (
     "evaluation_runs",
@@ -422,6 +427,31 @@ class ArtifactStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS tenant_quotas (
+                    tenant_id TEXT PRIMARY KEY REFERENCES control_plane_tenants(tenant_id),
+                    max_queued_jobs INTEGER CHECK (max_queued_jobs >= 0),
+                    max_jobs_per_hour INTEGER CHECK (max_jobs_per_hour >= 0),
+                    max_running_jobs INTEGER CHECK (max_running_jobs >= 0),
+                    max_running_cuda_jobs INTEGER CHECK (max_running_cuda_jobs >= 0),
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    updated_by TEXT NOT NULL,
+                    CHECK (
+                        max_running_jobs IS NULL
+                        OR max_running_cuda_jobs IS NULL
+                        OR max_running_cuda_jobs <= max_running_jobs
+                    )
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO tenant_quotas (tenant_id, updated_at, updated_by)
+                SELECT tenant_id, updated_at, updated_by FROM control_plane_tenants
+                ON CONFLICT (tenant_id) DO NOTHING
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS guardrail_config_versions (
                     config_id TEXT NOT NULL,
                     version TEXT NOT NULL,
@@ -550,7 +580,7 @@ class ArtifactStore:
                 )
                 return
             stored_version = cast(int, row["version"])
-            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}:
+            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif stored_version != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {stored_version}"
@@ -699,6 +729,13 @@ class ArtifactStore:
                     """,
                     (tenant_id, key_id, secret_sha256, ["admin"], now, created_by),
                 ).fetchone()
+                connection.execute(
+                    """
+                    INSERT INTO tenant_quotas (tenant_id, updated_at, updated_by)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (tenant_id, now, created_by),
+                )
         except UniqueViolation as error:
             raise TenantConflictError(f"tenant or API key already exists: {tenant_id}") from error
         if tenant_row is None or key_row is None:
@@ -750,6 +787,109 @@ class ArtifactStore:
         if row is None:
             raise KeyError(tenant_id)
         return TenantRecord.model_validate(row)
+
+    def get_tenant_quota(self, tenant_id: str) -> TenantQuotaRecord:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT tenant_id, max_queued_jobs, max_jobs_per_hour,
+                       max_running_jobs, max_running_cuda_jobs, updated_at, updated_by
+                FROM tenant_quotas WHERE tenant_id = %s
+                """,
+                (tenant_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(tenant_id)
+        return TenantQuotaRecord.model_validate(row)
+
+    def set_tenant_quota(
+        self, tenant_id: str, quota: TenantQuotaLimits, *, updated_by: str
+    ) -> TenantQuotaRecord:
+        self.initialize()
+        with self._connect() as connection:
+            self._lock_tenant_quota(connection, tenant_id)
+            row = connection.execute(
+                """
+                UPDATE tenant_quotas
+                SET max_queued_jobs = %s, max_jobs_per_hour = %s,
+                    max_running_jobs = %s, max_running_cuda_jobs = %s,
+                    updated_at = %s, updated_by = %s
+                WHERE tenant_id = %s
+                RETURNING tenant_id, max_queued_jobs, max_jobs_per_hour,
+                          max_running_jobs, max_running_cuda_jobs, updated_at, updated_by
+                """,
+                (
+                    quota.max_queued_jobs,
+                    quota.max_jobs_per_hour,
+                    quota.max_running_jobs,
+                    quota.max_running_cuda_jobs,
+                    datetime.now(UTC),
+                    updated_by,
+                    tenant_id,
+                ),
+            ).fetchone()
+        if row is None:
+            raise KeyError(tenant_id)
+        return TenantQuotaRecord.model_validate(row)
+
+    def tenant_quota_status(self) -> TenantQuotaStatus:
+        self.initialize()
+        tenant_id = current_tenant_id()
+        with self._connect() as connection:
+            quota = self._tenant_quota(connection, tenant_id)
+            if quota is None:
+                raise KeyError(tenant_id)
+            usage = self._tenant_quota_usage(connection)
+        return TenantQuotaStatus(quota=quota, usage=usage)
+
+    @staticmethod
+    def _tenant_quota(
+        connection: psycopg.Connection[dict[str, object]], tenant_id: str
+    ) -> TenantQuotaRecord | None:
+        row = connection.execute(
+            """
+            SELECT tenant_id, max_queued_jobs, max_jobs_per_hour,
+                   max_running_jobs, max_running_cuda_jobs, updated_at, updated_by
+            FROM tenant_quotas WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        ).fetchone()
+        return TenantQuotaRecord.model_validate(row) if row is not None else None
+
+    @staticmethod
+    def _tenant_quota_usage(
+        connection: psycopg.Connection[dict[str, object]],
+    ) -> TenantQuotaUsage:
+        row = connection.execute(
+            """
+            SELECT count(*) FILTER (WHERE status = 'queued') AS queued_jobs,
+                   count(*) FILTER (
+                       WHERE status = 'running' AND lease_expires_at >= now()
+                   ) AS active_running_jobs,
+                   count(*) FILTER (
+                       WHERE status = 'running' AND lease_expires_at >= now()
+                         AND required_accelerator = 'cuda'
+                   ) AS active_running_cuda_jobs,
+                   count(*) FILTER (
+                       WHERE created_at >= now() - interval '1 hour'
+                   ) AS jobs_submitted_last_hour,
+                   now() AS measured_at,
+                   now() - interval '1 hour' AS submission_window_started_at
+            FROM evaluation_jobs
+            """
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("PostgreSQL did not return tenant quota usage")
+        return TenantQuotaUsage.model_validate(row)
+
+    def _lock_tenant_quota(
+        self, connection: psycopg.Connection[dict[str, object]], tenant_id: str
+    ) -> None:
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"{self.schema}:{tenant_id}:resource-quota",),
+        )
 
     def tenant_access_allowed(self, tenant_id: str) -> bool:
         """Treat unregistered static-key tenants as active for backward compatibility."""
@@ -1793,7 +1933,25 @@ class ArtifactStore:
             request_id=request_id,
         )
         self.initialize()
+        tenant_id = current_tenant_id()
         with self._connect() as connection:
+            self._lock_tenant_quota(connection, tenant_id)
+            quota = self._tenant_quota(connection, tenant_id)
+            if quota is not None:
+                usage = self._tenant_quota_usage(connection)
+                if quota.max_queued_jobs is not None and usage.queued_jobs >= quota.max_queued_jobs:
+                    raise TenantQuotaExceededError(
+                        "max_queued_jobs", quota.max_queued_jobs, usage.queued_jobs + 1
+                    )
+                if (
+                    quota.max_jobs_per_hour is not None
+                    and usage.jobs_submitted_last_hour >= quota.max_jobs_per_hour
+                ):
+                    raise TenantQuotaExceededError(
+                        "max_jobs_per_hour",
+                        quota.max_jobs_per_hour,
+                        usage.jobs_submitted_last_hour + 1,
+                    )
             row = connection.execute(
                 """
                 INSERT INTO evaluation_jobs (
@@ -1995,7 +2153,22 @@ class ArtifactStore:
                         "mig_profile": gpu.mig_profile,
                     }
                 )
+        tenant_id = current_tenant_id()
         with self._connect() as connection:
+            self._lock_tenant_quota(connection, tenant_id)
+            quota = self._tenant_quota(connection, tenant_id)
+            cuda_quota_available = True
+            if quota is not None:
+                usage = self._tenant_quota_usage(connection)
+                if (
+                    quota.max_running_jobs is not None
+                    and usage.active_running_jobs >= quota.max_running_jobs
+                ):
+                    return None
+                cuda_quota_available = (
+                    quota.max_running_cuda_jobs is None
+                    or usage.active_running_cuda_jobs < quota.max_running_cuda_jobs
+                )
             row = connection.execute(
                 """
                 WITH claimable AS (
@@ -2003,6 +2176,7 @@ class ArtifactStore:
                     FROM evaluation_jobs
                     WHERE attempts < max_attempts
                       AND required_accelerator = ANY(%s)
+                      AND (required_accelerator <> 'cuda' OR %s)
                       AND %s::jsonb @> required_labels
                       AND (
                         (
@@ -2068,7 +2242,14 @@ class ArtifactStore:
                 WHERE jobs.job_id = claimable.job_id
                 RETURNING jobs.*
                 """,
-                (accelerators, Jsonb(labels), Jsonb(gpu_profiles), worker_id, lease_seconds),
+                (
+                    accelerators,
+                    cuda_quota_available,
+                    Jsonb(labels),
+                    Jsonb(gpu_profiles),
+                    worker_id,
+                    lease_seconds,
+                ),
             ).fetchone()
         return EvaluationJob.model_validate(row) if row is not None else None
 

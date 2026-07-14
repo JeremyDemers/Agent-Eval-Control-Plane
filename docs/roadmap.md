@@ -44,11 +44,11 @@ Implemented ahead of the original four-day scope:
 - Tenant-scoped append-only evidence ledger with hash-chain and source-deletion verification
 - Self-service tenant lifecycle with isolated operator scope, key rotation, and suspension
 - Ed25519 ledger checkpoints with S3 Object Lock compliance retention and rollback detection
+- Atomic per-tenant queue, submission-rate, execution, and CUDA concurrency quotas
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
 - Automated scheduled restore drills and cross-region PostgreSQL replica promotion
 - Additional hosted provider authentication and endpoint-specific adapters
-- Tenant quotas and identity federation, cross-region evidence replication, and remote KMS signing
-  adapters
+- Identity federation, cross-region evidence replication, and remote KMS signing adapters

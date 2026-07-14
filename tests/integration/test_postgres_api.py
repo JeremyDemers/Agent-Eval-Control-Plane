@@ -23,6 +23,7 @@ from aecontrol.integrity import ED25519, HMAC_SHA256, ArtifactKeyring, generate_
 from aecontrol.jobs import EvaluationWorker
 from aecontrol.models import Accelerator, GpuDevice, JobStatus, WorkerCapabilities
 from aecontrol.store import ArtifactStore
+from aecontrol.tenancy import bind_tenant, reset_tenant
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def api_client(database_url: str) -> TestClient:
         connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
-@pytest.mark.parametrize("stored_version", [1, 10, 14, 15])
+@pytest.mark.parametrize("stored_version", [1, 10, 14, 15, 16])
 def test_supported_schema_is_migrated_in_place(database_url: str, stored_version: int) -> None:
     schema = f"test_{uuid4().hex}"
     try:
@@ -58,7 +59,7 @@ def test_supported_schema_is_migrated_in_place(database_url: str, stored_version
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 16
+        assert store.health()["schema_version"] == 17
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -347,6 +348,209 @@ def test_self_service_tenant_lifecycle_and_key_rotation(database_url: str, tmp_p
             )
 
 
+def test_tenant_quotas_enforce_submission_and_concurrent_leases(
+    database_url: str, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    schema = f"test_{uuid4().hex}"
+    auth_config = tmp_path / "quota-auth.yaml"
+    auth_config.write_text(
+        "keys:\n"
+        f"  - key_id: platform-operator\n    tenant_id: control-plane\n"
+        f"    secret_sha256: {hash_api_key('operator-secret')}\n    scopes: [operator]\n"
+    )
+    operator = {"Authorization": "Bearer operator-secret"}
+    suite = "examples/suites/coding_repair.yaml"
+    try:
+        with TestClient(create_app(database_url, schema=schema, auth_config=auth_config)) as client:
+            created = client.post(
+                "/api/v1/platform/tenants",
+                headers=operator,
+                json={"tenant_id": "research", "display_name": "GPU Research"},
+            )
+            assert created.status_code == 201
+            tenant = {"Authorization": f"Bearer {created.json()['secret']}"}
+
+            configured = client.put(
+                "/api/v1/platform/tenants/research/quota",
+                headers=operator,
+                json={
+                    "max_queued_jobs": 1,
+                    "max_jobs_per_hour": 2,
+                    "max_running_jobs": 1,
+                    "max_running_cuda_jobs": 0,
+                },
+            )
+            assert configured.status_code == 200
+            assert configured.json()["updated_by"] == "platform-operator"
+            assert (
+                client.put(
+                    "/api/v1/platform/tenants/research/quota",
+                    headers=tenant,
+                    json={},
+                ).status_code
+                == 403
+            )
+
+            first = client.post(
+                "/api/v1/jobs",
+                headers=tenant,
+                json={"suite_path": suite, "agent_version": "baseline"},
+            )
+            assert first.status_code == 202
+            queue_blocked = client.post(
+                "/api/v1/jobs",
+                headers=tenant,
+                json={"suite_path": suite, "agent_version": "baseline"},
+            )
+            assert queue_blocked.status_code == 429
+            assert queue_blocked.json()["detail"] == {
+                "code": "tenant_quota_exceeded",
+                "quota": "max_queued_jobs",
+                "limit": 1,
+                "observed": 2,
+            }
+
+            assert (
+                client.delete(f"/api/v1/jobs/{first.json()['job_id']}", headers=tenant).status_code
+                == 200
+            )
+            second = client.post(
+                "/api/v1/jobs",
+                headers=tenant,
+                json={"suite_path": suite, "agent_version": "baseline"},
+            )
+            assert second.status_code == 202
+            assert (
+                client.delete(f"/api/v1/jobs/{second.json()['job_id']}", headers=tenant).status_code
+                == 200
+            )
+            hourly_blocked = client.post(
+                "/api/v1/jobs",
+                headers=tenant,
+                json={"suite_path": suite, "agent_version": "baseline"},
+            )
+            assert hourly_blocked.status_code == 429
+            assert hourly_blocked.json()["detail"]["quota"] == "max_jobs_per_hour"
+
+            relaxed = client.put(
+                "/api/v1/platform/tenants/research/quota",
+                headers=operator,
+                json={
+                    "max_queued_jobs": 10,
+                    "max_jobs_per_hour": 100,
+                    "max_running_jobs": 1,
+                    "max_running_cuda_jobs": 1,
+                },
+            )
+            assert relaxed.status_code == 200
+            for _ in range(2):
+                assert (
+                    client.post(
+                        "/api/v1/jobs",
+                        headers=tenant,
+                        json={"suite_path": suite, "agent_version": "baseline"},
+                    ).status_code
+                    == 202
+                )
+
+            store = client.app.state.store
+            capabilities = WorkerCapabilities(
+                hostname="quota-worker",
+                operating_system="linux",
+                architecture="x86_64",
+                cpu_count=8,
+                accelerators=[Accelerator.CPU],
+            )
+
+            def lease(worker_id: str):  # type: ignore[no-untyped-def]
+                token = bind_tenant("research")
+                try:
+                    return store.lease_job(worker_id, capabilities=capabilities)
+                finally:
+                    reset_tenant(token)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                leased = list(executor.map(lease, ("worker-a", "worker-b")))
+            assert sum(job is not None for job in leased) == 1
+
+            quota_status = client.get("/api/v1/tenant/quota", headers=tenant)
+            assert quota_status.status_code == 200
+            assert quota_status.json()["usage"]["active_running_jobs"] == 1
+            assert quota_status.json()["usage"]["queued_jobs"] == 1
+            assert (
+                client.get("/api/v1/platform/tenants/research/quota", headers=operator).json()[
+                    "max_running_jobs"
+                ]
+                == 1
+            )
+
+            for job in client.get("/api/v1/jobs", headers=tenant).json():
+                if job["status"] in {"queued", "running"}:
+                    assert (
+                        client.delete(f"/api/v1/jobs/{job['job_id']}", headers=tenant).status_code
+                        == 200
+                    )
+            assert (
+                client.put(
+                    "/api/v1/platform/tenants/research/quota",
+                    headers=operator,
+                    json={
+                        "max_queued_jobs": 10,
+                        "max_jobs_per_hour": 100,
+                        "max_running_jobs": 2,
+                        "max_running_cuda_jobs": 1,
+                    },
+                ).status_code
+                == 200
+            )
+            for accelerator, priority in (("cuda", 10), ("cuda", 9), ("cpu", 0)):
+                assert (
+                    client.post(
+                        "/api/v1/jobs",
+                        headers=tenant,
+                        json={
+                            "suite_path": suite,
+                            "agent_version": "baseline",
+                            "required_accelerator": accelerator,
+                            "priority": priority,
+                        },
+                    ).status_code
+                    == 202
+                )
+
+            cuda_capabilities = WorkerCapabilities(
+                hostname="mixed-worker",
+                operating_system="linux",
+                architecture="x86_64",
+                cpu_count=8,
+                accelerators=[Accelerator.CPU, Accelerator.CUDA],
+                gpus=[
+                    GpuDevice(
+                        name="NVIDIA L4",
+                        memory_total_mb=24_000,
+                        compute_capability="8.9",
+                    )
+                ],
+            )
+            token = bind_tenant("research")
+            try:
+                first_mixed = store.lease_job("mixed-a", capabilities=cuda_capabilities)
+                second_mixed = store.lease_job("mixed-b", capabilities=cuda_capabilities)
+                third_mixed = store.lease_job("mixed-c", capabilities=cuda_capabilities)
+            finally:
+                reset_tenant(token)
+            assert first_mixed is not None
+            assert first_mixed.required_accelerator == Accelerator.CUDA
+            assert second_mixed is not None
+            assert second_mixed.required_accelerator == Accelerator.CPU
+            assert third_mixed is None
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
 def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
     schema = f"test_{uuid4().hex}"
     role = f"tenant_test_{uuid4().hex}"
@@ -447,7 +651,7 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
             )
 
         migrated = ArtifactStore(tenant_database_url, schema=schema)
-        assert migrated.health()["schema_version"] == 16
+        assert migrated.health()["schema_version"] == 17
 
         with psycopg.connect(database_url) as connection:
             ledger_tenants = connection.execute(
@@ -498,7 +702,7 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 16
+    assert health.json()["schema_version"] == 17
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")

@@ -163,6 +163,10 @@ to evidence, jobs, policy history, and worker inventory while transaction-local 
 across pooled connections. See [`docs/multi-tenancy.md`](docs/multi-tenancy.md) for worker topology,
 KEDA, migration, and database-role boundaries.
 
+Schema v17 adds atomic tenant quotas for queue depth, rolling submissions, active execution, and CUDA
+leases. See [`docs/tenant-quotas.md`](docs/tenant-quotas.md) for operator configuration and tenant
+usage inspection.
+
 Operational endpoints provide database health, queue-aware readiness, Prometheus-compatible metrics,
 correlated request timing, and W3C Trace Context propagation. Queued jobs persist their originating
 `traceparent` and request ID; workers continue the same trace after the PostgreSQL handoff.
@@ -262,7 +266,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.42.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.43.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -418,6 +422,11 @@ isolated bootstrap `operator` scope, atomic tenant provisioning, one-time dynami
 tenant-admin rotation, revocation history, and fail-closed suspension without granting the platform
 operator access to tenant evidence.
 
+Schema v17 adds atomic tenant resource governance across replicated APIs and workers. Operators can
+bound queued jobs, rolling hourly submissions, active execution leases, and CUDA-specific leases;
+tenants can inspect their own policy and live usage. PostgreSQL advisory locks serialize admission
+per tenant without blocking unrelated tenants, and quota failures return structured HTTP 429 detail.
+
 ```bash
 uv run aecontrol auth hash-key
 uv run aecontrol auth validate auth.yaml
@@ -427,6 +436,8 @@ AECONTROL_AUTH_CONFIG=auth.yaml make serve
 See [`docs/authentication.md`](docs/authentication.md) for configuration and rotation guidance. See
 [`docs/tenant-lifecycle.md`](docs/tenant-lifecycle.md) for the operator and self-service API,
 concurrency invariants, backward compatibility, and credential-registry trust boundary.
+See [`docs/tenant-quotas.md`](docs/tenant-quotas.md) for policy semantics, REST, CLI, SDK, and
+concurrency guarantees.
 
 ## Asymmetric Artifact Attestations
 
@@ -466,8 +477,8 @@ The browser explorer is intentionally local-trust for this portfolio phase. The 
 backend is not hardened isolation for untrusted code, while the stronger Podman backend still shares
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Automated
-restore drills, cross-region promotion, additional hosted providers, remote KMS signing, tenant
-quotas and federation, and cross-tenant fleet analytics remain in `docs/roadmap.md`.
+restore drills, cross-region promotion, additional hosted providers, remote KMS signing, identity
+federation, and cross-tenant fleet analytics remain in `docs/roadmap.md`.
 
 ## Project Governance
 

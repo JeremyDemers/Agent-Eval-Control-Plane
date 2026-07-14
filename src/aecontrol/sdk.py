@@ -39,6 +39,9 @@ from aecontrol.models import (
 from aecontrol.tenants import (
     IssuedTenantAPIKey,
     TenantAPIKeyRecord,
+    TenantQuotaLimits,
+    TenantQuotaRecord,
+    TenantQuotaStatus,
     TenantRecord,
     TenantScope,
     TenantStatus,
@@ -170,6 +173,25 @@ class AgentEvalClient:
             self.transport.request(
                 "PATCH", f"/api/v1/platform/tenants/{tenant_id}", {"status": status}
             )
+        )
+
+    def tenant_quota(self, tenant_id: str) -> TenantQuotaRecord:
+        return TenantQuotaRecord.model_validate(
+            self.transport.request("GET", f"/api/v1/platform/tenants/{tenant_id}/quota")
+        )
+
+    def set_tenant_quota(self, tenant_id: str, quota: TenantQuotaLimits) -> TenantQuotaRecord:
+        return TenantQuotaRecord.model_validate(
+            self.transport.request(
+                "PUT",
+                f"/api/v1/platform/tenants/{tenant_id}/quota",
+                quota.model_dump(mode="json"),
+            )
+        )
+
+    def current_tenant_quota(self) -> TenantQuotaStatus:
+        return TenantQuotaStatus.model_validate(
+            self.transport.request("GET", "/api/v1/tenant/quota")
         )
 
     def tenant(self) -> TenantRecord:
@@ -437,6 +459,15 @@ class AsyncAgentEvalClient:
 
     async def set_tenant_status(self, tenant_id: str, status: TenantStatus) -> TenantRecord:
         return await asyncio.to_thread(self._sync.set_tenant_status, tenant_id, status)
+
+    async def tenant_quota(self, tenant_id: str) -> TenantQuotaRecord:
+        return await asyncio.to_thread(self._sync.tenant_quota, tenant_id)
+
+    async def set_tenant_quota(self, tenant_id: str, quota: TenantQuotaLimits) -> TenantQuotaRecord:
+        return await asyncio.to_thread(self._sync.set_tenant_quota, tenant_id, quota)
+
+    async def current_tenant_quota(self) -> TenantQuotaStatus:
+        return await asyncio.to_thread(self._sync.current_tenant_quota)
 
     async def tenant(self) -> TenantRecord:
         return await asyncio.to_thread(self._sync.tenant)

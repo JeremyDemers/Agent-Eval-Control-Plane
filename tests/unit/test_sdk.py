@@ -31,7 +31,15 @@ from aecontrol.sdk import (
     AsyncAgentEvalClient,
     HttpTransport,
 )
-from aecontrol.tenants import IssuedTenantAPIKey, TenantAPIKeyRecord, TenantRecord
+from aecontrol.tenants import (
+    IssuedTenantAPIKey,
+    TenantAPIKeyRecord,
+    TenantQuotaLimits,
+    TenantQuotaRecord,
+    TenantQuotaStatus,
+    TenantQuotaUsage,
+    TenantRecord,
+)
 
 
 class FakeTransport:
@@ -433,6 +441,71 @@ def test_client_manages_tenant_lifecycle() -> None:
         "initial_key_id": "admin-v1",
     }
     assert transport.requests[5][2] == {"key_id": "admin-v1", "scopes": ["admin"]}
+
+
+def test_client_manages_tenant_quotas() -> None:
+    transport = FakeTransport()
+    now = datetime.now(UTC)
+    limits = TenantQuotaLimits(
+        max_queued_jobs=20,
+        max_jobs_per_hour=100,
+        max_running_jobs=4,
+        max_running_cuda_jobs=2,
+    )
+    quota = TenantQuotaRecord(
+        tenant_id="research", **limits.model_dump(), updated_at=now, updated_by="operator"
+    )
+    status = TenantQuotaStatus(
+        quota=quota,
+        usage=TenantQuotaUsage(
+            queued_jobs=3,
+            active_running_jobs=2,
+            active_running_cuda_jobs=1,
+            jobs_submitted_last_hour=8,
+            measured_at=now,
+            submission_window_started_at=now - timedelta(hours=1),
+        ),
+    )
+    quota_payload = quota.model_dump(mode="json")
+    transport.add("GET", "/api/v1/platform/tenants/research/quota", quota_payload)
+    transport.add("PUT", "/api/v1/platform/tenants/research/quota", quota_payload)
+    transport.add("GET", "/api/v1/tenant/quota", status.model_dump(mode="json"))
+    client = AgentEvalClient(transport=transport)
+
+    assert client.tenant_quota("research") == quota
+    assert client.set_tenant_quota("research", limits) == quota
+    assert client.current_tenant_quota() == status
+    assert transport.requests[1][2] == limits.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_async_client_wraps_tenant_quotas() -> None:
+    transport = FakeTransport()
+    now = datetime.now(UTC)
+    limits = TenantQuotaLimits(max_running_jobs=2, max_running_cuda_jobs=1)
+    quota = TenantQuotaRecord(
+        tenant_id="research", **limits.model_dump(), updated_at=now, updated_by="operator"
+    )
+    status = TenantQuotaStatus(
+        quota=quota,
+        usage=TenantQuotaUsage(
+            queued_jobs=0,
+            active_running_jobs=0,
+            active_running_cuda_jobs=0,
+            jobs_submitted_last_hour=0,
+            measured_at=now,
+            submission_window_started_at=now - timedelta(hours=1),
+        ),
+    )
+    quota_payload = quota.model_dump(mode="json")
+    transport.add("GET", "/api/v1/platform/tenants/research/quota", quota_payload)
+    transport.add("PUT", "/api/v1/platform/tenants/research/quota", quota_payload)
+    transport.add("GET", "/api/v1/tenant/quota", status.model_dump(mode="json"))
+    client = AsyncAgentEvalClient(transport=transport)
+
+    assert await client.tenant_quota("research") == quota
+    assert await client.set_tenant_quota("research", limits) == quota
+    assert await client.current_tenant_quota() == status
 
 
 def test_wait_validation_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
