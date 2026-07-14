@@ -262,7 +262,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.39.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.40.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -430,6 +430,12 @@ signature envelopes. Ed25519 workers sign with private keys held outside Postgre
 auditors verify with public keys only. Reads fail closed on digest mismatch, invalid signature, or an
 unavailable historical key; audits report HMAC, Ed25519, and legacy unsigned evidence separately
 without returning artifact payloads. Schema v13 migrates existing HMAC signatures in place.
+
+Schema v14 also records every artifact in a tenant-scoped append-only transparency ledger. Each entry
+commits to the previous hash, artifact identity, payload digest, and signature envelope. Audits detect
+chain gaps, altered entries, envelope drift, and deleted source artifacts; PostgreSQL triggers reject
+ledger updates and deletes. See [`docs/evidence-transparency.md`](docs/evidence-transparency.md) for
+concurrency, migration, RLS, and external-checkpoint boundaries.
 
 ```bash
 uv run aecontrol store generate-signing-key --algorithm ed25519

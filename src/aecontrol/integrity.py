@@ -22,6 +22,7 @@ ED25519_PUBLIC_KEYS_ENV = "AECONTROL_ARTIFACT_ED25519_PUBLIC_KEYS"
 HMAC_SHA256 = "hmac-sha256"
 ED25519 = "ed25519"
 SIGNATURE_ALGORITHMS = frozenset({HMAC_SHA256, ED25519})
+LEDGER_GENESIS_SHA256 = "0" * 64
 _KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _SIGNATURE_CONTEXT = "aecontrol:v1"
 
@@ -35,6 +36,32 @@ def artifact_digest(payload: Any) -> str:
         allow_nan=False,
     ).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def ledger_entry_digest(
+    tenant_id: str,
+    sequence: int,
+    artifact_type: str,
+    artifact_id: UUID,
+    payload_sha256: str,
+    signature_algorithm: str | None,
+    signing_key_id: str | None,
+    signature: str | None,
+    previous_entry_sha256: str,
+) -> str:
+    return artifact_digest(
+        {
+            "tenant_id": tenant_id,
+            "sequence": sequence,
+            "artifact_type": artifact_type,
+            "artifact_id": str(artifact_id),
+            "payload_sha256": payload_sha256,
+            "signature_algorithm": signature_algorithm,
+            "signing_key_id": signing_key_id,
+            "signature": signature,
+            "previous_entry_sha256": previous_entry_sha256,
+        }
+    )
 
 
 def _normalize_json(value: Any) -> Any:

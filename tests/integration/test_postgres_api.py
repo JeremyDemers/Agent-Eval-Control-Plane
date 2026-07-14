@@ -57,7 +57,7 @@ def test_supported_schema_is_migrated_in_place(database_url: str, stored_version
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 13
+        assert store.health()["schema_version"] == 14
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -302,7 +302,41 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
                 visible = client.get("/api/v1/guardrails/config-versions", headers=headers)
                 assert [item["bundle_sha256"] for item in visible.json()] == [digest]
 
+            for headers, agent_version in ((alpha, "baseline"), (beta, "candidate_fixed")):
+                evaluated = client.post(
+                    "/api/v1/evaluations",
+                    headers=headers,
+                    json={
+                        "suite_path": "examples/suites/coding_repair.yaml",
+                        "agent_version": agent_version,
+                    },
+                )
+                assert evaluated.status_code == 201
+
         with psycopg.connect(database_url) as connection:
+            connection.execute(
+                sql.SQL(
+                    "ALTER TABLE {}.artifact_ledger DISABLE TRIGGER artifact_ledger_append_only"
+                ).format(sql.Identifier(schema))
+            )
+            connection.execute(
+                sql.SQL("DELETE FROM {}.artifact_ledger").format(sql.Identifier(schema))
+            )
+            connection.execute(
+                sql.SQL("UPDATE {}.schema_metadata SET version = 13").format(sql.Identifier(schema))
+            )
+
+        migrated = ArtifactStore(tenant_database_url, schema=schema)
+        assert migrated.health()["schema_version"] == 14
+
+        with psycopg.connect(database_url) as connection:
+            ledger_tenants = connection.execute(
+                sql.SQL(
+                    "SELECT tenant_id, count(*) FROM {}.artifact_ledger "
+                    "GROUP BY tenant_id ORDER BY tenant_id"
+                ).format(sql.Identifier(schema))
+            ).fetchall()
+            assert ledger_tenants == [("alpha", 1), ("beta", 1)]
             isolated_tables = connection.execute(
                 """SELECT count(*) AS value
                    FROM pg_class AS class
@@ -321,11 +355,12 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
                         "guardrail_config_activations",
                         "evaluation_jobs",
                         "workers",
+                        "artifact_ledger",
                     ],
                 ),
             ).fetchone()
             assert isolated_tables is not None
-            assert isolated_tables[0] == 7
+            assert isolated_tables[0] == 8
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -342,7 +377,7 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 13
+    assert health.json()["schema_version"] == 14
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")
@@ -408,12 +443,17 @@ def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) 
 
     integrity = api_client.get("/api/v1/integrity")
     assert integrity.status_code == 200
-    assert integrity.json() == {
+    integrity_payload = integrity.json()
+    assert len(integrity_payload.pop("ledger_head_sha256")) == 64
+    assert integrity_payload == {
         "checked": 3,
         "valid": 3,
         "signed": 0,
         "unsigned": 3,
         "signature_algorithms": {},
+        "ledger_checked": 3,
+        "ledger_valid": 3,
+        "ledger_failures": [],
         "failures": [],
     }
 
@@ -557,6 +597,73 @@ def test_signed_artifacts_support_rotation_and_fail_closed(database_url: str) ->
             connection.execute(
                 sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
             )
+
+
+def test_artifact_ledger_is_append_only_and_detects_source_deletion(
+    api_client: TestClient,
+) -> None:
+    run_ids: list[str] = []
+    for agent_version in ("baseline", "candidate_fixed"):
+        created = api_client.post(
+            "/api/v1/evaluations",
+            json={
+                "suite_path": "examples/suites/coding_repair.yaml",
+                "agent_version": agent_version,
+            },
+        )
+        assert created.status_code == 201
+        run_ids.append(created.json()["run_id"])
+
+    report = api_client.get("/api/v1/integrity").json()
+    assert report["ledger_checked"] == 2
+    assert report["ledger_valid"] == 2
+    assert report["ledger_failures"] == []
+    assert len(report["ledger_head_sha256"]) == 64
+
+    store: ArtifactStore = api_client.app.state.store
+    with (
+        pytest.raises(psycopg.Error, match="artifact ledger is append-only"),
+        psycopg.connect(store.database_url) as connection,
+    ):
+        connection.execute(
+            sql.SQL("DELETE FROM {}.artifact_ledger WHERE sequence = 1").format(
+                sql.Identifier(store.schema)
+            )
+        )
+    with (
+        pytest.raises(psycopg.Error, match="artifact ledger is append-only"),
+        psycopg.connect(store.database_url) as connection,
+    ):
+        connection.execute(
+            sql.SQL("UPDATE {}.artifact_ledger SET entry_sha256 = %s WHERE sequence = 1").format(
+                sql.Identifier(store.schema)
+            ),
+            ("f" * 64,),
+        )
+
+    with psycopg.connect(store.database_url) as connection:
+        connection.execute(
+            sql.SQL("DELETE FROM {}.evaluation_runs WHERE run_id = %s").format(
+                sql.Identifier(store.schema)
+            ),
+            (run_ids[0],),
+        )
+
+    damaged = api_client.get("/api/v1/integrity").json()
+    assert damaged["checked"] == 1
+    assert damaged["valid"] == 1
+    assert damaged["ledger_checked"] == 2
+    assert damaged["ledger_valid"] == 1
+    assert damaged["ledger_failures"] == [
+        {
+            "sequence": 1,
+            "artifact_type": "run",
+            "artifact_id": run_ids[0],
+            "reason": "missing_artifact",
+            "expected_sha256": None,
+            "actual_sha256": None,
+        }
+    ]
 
 
 def test_ed25519_artifacts_support_independent_public_verification(database_url: str) -> None:
@@ -774,12 +881,17 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
     assert f"Activation {activation_v1}" in detail.text
 
     integrity = api_client.get("/api/v1/integrity")
-    assert integrity.json() == {
+    integrity_payload = integrity.json()
+    assert len(integrity_payload.pop("ledger_head_sha256")) == 64
+    assert integrity_payload == {
         "checked": 1,
         "valid": 1,
         "signed": 0,
         "unsigned": 1,
         "signature_algorithms": {},
+        "ledger_checked": 1,
+        "ledger_valid": 1,
+        "ledger_failures": [],
         "failures": [],
     }
 

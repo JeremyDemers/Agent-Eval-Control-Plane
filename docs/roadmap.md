@@ -41,6 +41,7 @@ Implemented ahead of the original four-day scope:
 - Barman Cloud WAL archiving, daily base backups, 30-day retention, PITR template, and backup alerts
 - API-key-bound tenants with forced PostgreSQL RLS across evidence, queues, policies, and workers
 - Ed25519 evidence attestations with public-key-only verification and legacy HMAC migration
+- Tenant-scoped append-only evidence ledger with hash-chain and source-deletion verification
 
 Next stages:
 
