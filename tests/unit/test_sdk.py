@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import json
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import Mock
 from urllib.error import HTTPError, URLError
@@ -11,6 +11,11 @@ from uuid import uuid4
 
 import pytest
 
+from aecontrol.checkpoints import (
+    CheckpointPublication,
+    LedgerCheckpointPayload,
+    SignedLedgerCheckpoint,
+)
 from aecontrol.guardrails import (
     ExpectedGuardrailAction,
     GuardrailConfigActivation,
@@ -101,6 +106,30 @@ def demand_payload() -> dict[str, Any]:
         "saturation": "within_capacity",
         "hours": [],
     }
+
+
+def checkpoint_publication() -> CheckpointPublication:
+    now = datetime.now(UTC)
+    checkpoint = SignedLedgerCheckpoint(
+        payload=LedgerCheckpointPayload(
+            checkpoint_id=uuid4(),
+            tenant_id="research",
+            ledger_sequence=4,
+            ledger_entries=4,
+            ledger_head_sha256="a" * 64,
+            created_at=now,
+            retention_until=now + timedelta(days=30),
+        ),
+        payload_sha256="b" * 64,
+        signing_key_id="release-key",
+        signature="signature",
+    )
+    return CheckpointPublication(
+        checkpoint=checkpoint,
+        destination="s3://evidence/checkpoints/research/4.json",
+        object_key="checkpoints/research/4.json",
+        published_at=now,
+    )
 
 
 def test_sync_client_serializes_and_waits_for_job() -> None:
@@ -230,6 +259,19 @@ def test_client_collections_operations_and_cancellation() -> None:
     assert client.list_comparisons() == []
     assert client.operations().job_counts == {"cancelled": 1}
     assert client.verify_artifacts().valid == 2
+
+
+def test_client_publishes_and_lists_ledger_checkpoints() -> None:
+    transport = FakeTransport()
+    publication = checkpoint_publication()
+    payload = publication.model_dump(mode="json")
+    transport.add("POST", "/api/v1/integrity/checkpoints", payload)
+    transport.add("GET", "/api/v1/integrity/checkpoints", [payload["checkpoint"]])
+    client = AgentEvalClient(transport=transport)
+
+    assert client.publish_ledger_checkpoint(90) == publication
+    assert client.ledger_checkpoints() == [publication.checkpoint]
+    assert transport.requests[0][2] == {"retention_days": 90}
 
 
 def test_client_guardrail_evidence_workflow() -> None:
@@ -436,6 +478,19 @@ async def test_async_client_health_and_collections() -> None:
     assert await client.list_comparisons() == []
     assert (await client.gpu_capacity()).active_cuda_workers == 2
     assert (await client.gpu_demand()).saturation == "within_capacity"
+
+
+@pytest.mark.asyncio
+async def test_async_client_wraps_ledger_checkpoints() -> None:
+    transport = FakeTransport()
+    publication = checkpoint_publication()
+    payload = publication.model_dump(mode="json")
+    transport.add("POST", "/api/v1/integrity/checkpoints", payload)
+    transport.add("GET", "/api/v1/integrity/checkpoints", [payload["checkpoint"]])
+    client = AsyncAgentEvalClient(transport=transport)
+
+    assert await client.publish_ledger_checkpoint(60) == publication
+    assert await client.ledger_checkpoints() == [publication.checkpoint]
 
 
 @pytest.mark.asyncio

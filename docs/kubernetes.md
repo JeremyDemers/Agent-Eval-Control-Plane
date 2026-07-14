@@ -29,9 +29,23 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.41.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.42.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
+
+For retention-locked checkpoints, bind the API service account to an IAM role and inject only the
+bucket location; boto3 obtains short-lived workload credentials through its standard provider chain:
+
+```bash
+kubectl -n aecontrol set env deployment/api \
+  AECONTROL_CHECKPOINT_S3_BUCKET=agent-eval-evidence \
+  AECONTROL_CHECKPOINT_S3_REGION=us-east-1 \
+  AECONTROL_CHECKPOINT_S3_PREFIX=control-plane/checkpoints
+```
+
+Do not place static AWS credentials in the deployment. The bucket must have Object Lock enabled and
+the role must be restricted to the checkpoint prefix. See
+[`evidence-checkpoints.md`](evidence-checkpoints.md).
 
 To export distributed traces, inject the same collector configuration into the API and every worker
 deployment. The repository does not bundle or operate a collector:

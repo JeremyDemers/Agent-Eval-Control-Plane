@@ -22,6 +22,13 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
 from aecontrol.auth import Authenticator, Principal, hash_api_key
+from aecontrol.checkpoints import (
+    CheckpointPublication,
+    CheckpointPublicationError,
+    CheckpointSink,
+    S3ObjectLockCheckpointSink,
+    SignedLedgerCheckpoint,
+)
 from aecontrol.compare import compare_runs
 from aecontrol.database import (
     DatabaseRuntimeConfiguration,
@@ -153,6 +160,10 @@ class TenantAPIKeyRequest(BaseModel):
     scopes: set[TenantScope] = Field(min_length=1)
 
 
+class LedgerCheckpointRequest(BaseModel):
+    retention_days: int = Field(default=30, ge=1, le=3650)
+
+
 def create_app(
     database_url: str | None = None,
     schema: str = "public",
@@ -161,6 +172,7 @@ def create_app(
     guardrails_client: GuardrailsClient | None = None,
     artifact_keyring: ArtifactKeyring | None = None,
     database_config: DatabaseRuntimeConfiguration | None = None,
+    checkpoint_sink: CheckpointSink | None = None,
 ) -> FastAPI:
     resolved_database_url = database_url or os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
     resolved_input_root = Path(
@@ -176,6 +188,7 @@ def create_app(
         database_config=database_config or database_configuration_from_environment(),
     )
     guardrails = guardrails_client or GuardrailsClient()
+    resolved_checkpoint_sink = checkpoint_sink or S3ObjectLockCheckpointSink.from_environment()
     authenticator = Authenticator(
         auth_config,
         credential_lookup=store.resolve_tenant_api_key,
@@ -208,6 +221,7 @@ def create_app(
     application.state.store = store
     application.state.authenticator = authenticator
     application.state.guardrails_client = guardrails
+    application.state.checkpoint_sink = resolved_checkpoint_sink
 
     @application.middleware("http")
     async def request_context(request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -321,6 +335,41 @@ def create_app(
     )
     def integrity(_principal: Principal = Depends(require_read)) -> ArtifactIntegrityReport:
         return store.verify_artifacts()
+
+    @application.get(
+        "/api/v1/integrity/checkpoints",
+        response_model=list[SignedLedgerCheckpoint],
+        tags=["operations"],
+    )
+    async def list_ledger_checkpoints(
+        _principal: Principal = Depends(require_read),
+    ) -> list[SignedLedgerCheckpoint]:
+        try:
+            return await asyncio.to_thread(store.list_ledger_checkpoints)
+        except ArtifactVerificationError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.post(
+        "/api/v1/integrity/checkpoints",
+        response_model=CheckpointPublication,
+        status_code=status.HTTP_201_CREATED,
+        tags=["operations"],
+    )
+    async def publish_ledger_checkpoint(
+        request: LedgerCheckpointRequest,
+        _principal: Principal = Depends(require_admin),
+    ) -> CheckpointPublication:
+        if resolved_checkpoint_sink is None:
+            raise HTTPException(status_code=503, detail="checkpoint publisher is not configured")
+        try:
+            checkpoint = await asyncio.to_thread(
+                store.create_ledger_checkpoint, request.retention_days
+            )
+            return await asyncio.to_thread(resolved_checkpoint_sink.publish, checkpoint)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except CheckpointPublicationError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     @application.get(
         "/api/v1/platform/tenants",

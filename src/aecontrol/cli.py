@@ -20,6 +20,7 @@ from rich.console import Console
 from aecontrol.agents import list_agent_versions
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key, load_auth_config
+from aecontrol.checkpoints import FileCheckpointSink, S3ObjectLockCheckpointSink
 from aecontrol.compare import compare_runs
 from aecontrol.database import database_configuration_from_environment
 from aecontrol.datasets import validate_jsonl_dataset
@@ -305,6 +306,9 @@ def store_verify(
             f"artifact ledger: {report.ledger_valid}/{report.ledger_checked} valid "
             f"head={report.ledger_head_sha256}"
         )
+        console.print(
+            f"ledger checkpoints: {report.checkpoint_valid}/{report.checkpoint_checked} valid"
+        )
         for ledger_failure in report.ledger_failures:
             console.print(
                 f"- ledger sequence {ledger_failure.sequence}: {ledger_failure.reason} "
@@ -314,8 +318,46 @@ def store_verify(
             console.print(
                 f"- {failure.artifact_type} {failure.artifact_id}: {failure.failure_kind} failure"
             )
-    if report.failures or report.ledger_failures:
+        for checkpoint_failure in report.checkpoint_failures:
+            console.print(
+                f"- checkpoint {checkpoint_failure.checkpoint_id}: "
+                f"{checkpoint_failure.reason} at sequence {checkpoint_failure.ledger_sequence}"
+            )
+    if report.failures or report.ledger_failures or report.checkpoint_failures:
         raise typer.Exit(1)
+
+
+@store_app.command("checkpoint")
+def store_checkpoint(
+    output: Path | None = typer.Option(None, "--output", help="Create-only checkpoint directory"),
+    s3: bool = typer.Option(False, "--s3", help="Publish to configured S3 Object Lock bucket"),
+    retention_days: int = typer.Option(30, "--retention-days", min=1, max=3650),
+    database_url: str = typer.Option(DEFAULT_DATABASE_URL, "--database-url", envvar="DATABASE_URL"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Sign and publish the current tenant ledger head."""
+    if (output is None and not s3) or (output is not None and s3):
+        raise typer.BadParameter("choose exactly one of --output or --s3")
+    try:
+        checkpoint = ArtifactStore(database_url).create_ledger_checkpoint(retention_days)
+        if s3:
+            sink = S3ObjectLockCheckpointSink.from_environment()
+            if sink is None:
+                raise ValueError("AECONTROL_CHECKPOINT_S3_BUCKET is required with --s3")
+            publication = sink.publish(checkpoint)
+        else:
+            assert output is not None
+            publication = FileCheckpointSink(output).publish(checkpoint)
+    except (RuntimeError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    if json_output:
+        console.print(publication.model_dump_json(indent=2))
+        return
+    console.print(
+        f"checkpoint {checkpoint.payload.checkpoint_id} "
+        f"sequence={checkpoint.payload.ledger_sequence} head={checkpoint.payload.ledger_head_sha256}"
+    )
+    console.print(f"published: {publication.destination}")
 
 
 @store_app.command("generate-signing-key")

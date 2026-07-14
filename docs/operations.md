@@ -30,6 +30,12 @@ When the in-process PostgreSQL pool is enabled, connection size, availability, c
 waiting requests are exported as low-cardinality gauges. Direct/PgBouncer mode omits those series.
 See [`database.md`](database.md) for sizing and migration-lock behavior.
 
+When S3 checkpoint variables are configured, tenant admins can publish a retention-locked signed
+ledger head through `POST /api/v1/integrity/checkpoints`. Publication failures return `502`, missing
+configuration returns `503`, and persisted checkpoints remain retryable under deterministic object
+keys. Operators should alert on both statuses. See
+[`evidence-checkpoints.md`](evidence-checkpoints.md).
+
 Every HTTP response includes `X-Request-ID` and `Server-Timing`. A caller-supplied request ID is
 preserved when it contains at most 64 alphanumeric, dot, underscore, or hyphen characters; otherwise
 the service generates a UUID. Structured request logs include that ID, method, path, status, and

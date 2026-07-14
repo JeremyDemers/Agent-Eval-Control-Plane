@@ -61,7 +61,8 @@ controls remain active. It does not by itself make PostgreSQL retention locked. 
 administrator who can disable or drop the trigger could truncate the chain tail and present the new
 last entry as the head.
 
-Production evidence systems should periodically publish the tenant head digest to an independent
-transparency service, signed release record, or retention-locked object store. Comparing that external
-checkpoint to the live head detects rollback and tail truncation. Remote KMS signing and automated
-checkpoint export remain future hardening stages.
+Schema v16 implements Ed25519-signed checkpoints with create-only local export and S3 Object Lock
+compliance retention. The ordinary audit compares every checkpoint sequence and head to the live
+chain, detecting rollback and tail truncation. See
+[`evidence-checkpoints.md`](evidence-checkpoints.md). Remote KMS signing and cross-region checkpoint
+replication remain future hardening stages.

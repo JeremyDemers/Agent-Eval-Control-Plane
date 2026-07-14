@@ -16,6 +16,7 @@ from psycopg.conninfo import make_conninfo
 
 from aecontrol.api import DEFAULT_DATABASE_URL, create_app
 from aecontrol.auth import hash_api_key
+from aecontrol.checkpoints import FileCheckpointSink, SignedLedgerCheckpoint, verify_checkpoint
 from aecontrol.database import DatabaseRuntimeConfiguration
 from aecontrol.guardrails import GuardrailEvidence, GuardrailsConfig, GuardrailsError
 from aecontrol.integrity import ED25519, HMAC_SHA256, ArtifactKeyring, generate_ed25519_keypair
@@ -38,7 +39,7 @@ def api_client(database_url: str) -> TestClient:
         connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
-@pytest.mark.parametrize("stored_version", [1, 10, 14])
+@pytest.mark.parametrize("stored_version", [1, 10, 14, 15])
 def test_supported_schema_is_migrated_in_place(database_url: str, stored_version: int) -> None:
     schema = f"test_{uuid4().hex}"
     try:
@@ -57,7 +58,7 @@ def test_supported_schema_is_migrated_in_place(database_url: str, stored_version
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 15
+        assert store.health()["schema_version"] == 16
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -446,7 +447,7 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
             )
 
         migrated = ArtifactStore(tenant_database_url, schema=schema)
-        assert migrated.health()["schema_version"] == 15
+        assert migrated.health()["schema_version"] == 16
 
         with psycopg.connect(database_url) as connection:
             ledger_tenants = connection.execute(
@@ -475,11 +476,12 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
                         "evaluation_jobs",
                         "workers",
                         "artifact_ledger",
+                        "ledger_checkpoints",
                     ],
                 ),
             ).fetchone()
             assert isolated_tables is not None
-            assert isolated_tables[0] == 8
+            assert isolated_tables[0] == 9
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -496,7 +498,7 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 15
+    assert health.json()["schema_version"] == 16
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")
@@ -573,6 +575,9 @@ def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) 
         "ledger_checked": 3,
         "ledger_valid": 3,
         "ledger_failures": [],
+        "checkpoint_checked": 0,
+        "checkpoint_valid": 0,
+        "checkpoint_failures": [],
         "failures": [],
     }
 
@@ -783,6 +788,105 @@ def test_artifact_ledger_is_append_only_and_detects_source_deletion(
             "actual_sha256": None,
         }
     ]
+
+
+def test_checkpoint_publication_requires_external_sink(api_client: TestClient) -> None:
+    response = api_client.post("/api/v1/integrity/checkpoints", json={"retention_days": 30})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "checkpoint publisher is not configured"}
+
+
+def test_signed_ledger_checkpoint_is_persisted_published_and_append_only(
+    database_url: str, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    schema = f"test_{uuid4().hex}"
+    private_key, public_key = generate_ed25519_keypair()
+    signer = ArtifactKeyring(
+        active_key_id="checkpoint-attestor",
+        active_algorithm=ED25519,
+        ed25519_private_keys={"checkpoint-attestor": private_key},
+    )
+    verifier = ArtifactKeyring(ed25519_public_keys={"checkpoint-attestor": public_key})
+    sink = FileCheckpointSink(tmp_path / "checkpoints")
+    try:
+        with TestClient(
+            create_app(
+                database_url,
+                schema=schema,
+                artifact_keyring=signer,
+                checkpoint_sink=sink,
+            )
+        ) as client:
+            created = client.post(
+                "/api/v1/evaluations",
+                json={
+                    "suite_path": "examples/suites/coding_repair.yaml",
+                    "agent_version": "candidate_fixed",
+                },
+            )
+            assert created.status_code == 201
+
+            published = client.post("/api/v1/integrity/checkpoints", json={"retention_days": 90})
+            assert published.status_code == 201
+            publication = published.json()
+            checkpoint = SignedLedgerCheckpoint.model_validate(publication["checkpoint"])
+            assert checkpoint.payload.ledger_sequence == 1
+            assert checkpoint.payload.ledger_entries == 1
+            assert (
+                checkpoint.payload.ledger_head_sha256
+                == client.get("/api/v1/integrity").json()["ledger_head_sha256"]
+            )
+            assert verify_checkpoint(checkpoint, verifier) is True
+            assert publication["destination"].startswith(str(tmp_path))
+            assert (tmp_path / "checkpoints" / publication["object_key"]).read_bytes() == (
+                checkpoint.canonical_bytes()
+            )
+
+            repeated = client.post("/api/v1/integrity/checkpoints", json={"retention_days": 30})
+            assert repeated.status_code == 201
+            assert repeated.json()["checkpoint"]["payload"]["checkpoint_id"] == str(
+                checkpoint.payload.checkpoint_id
+            )
+            listed = client.get("/api/v1/integrity/checkpoints")
+            assert listed.status_code == 200
+            assert [item["payload"]["checkpoint_id"] for item in listed.json()] == [
+                str(checkpoint.payload.checkpoint_id)
+            ]
+            audit = client.get("/api/v1/integrity").json()
+            assert audit["checkpoint_checked"] == 1
+            assert audit["checkpoint_valid"] == 1
+            assert audit["checkpoint_failures"] == []
+
+            with psycopg.connect(database_url) as connection:
+                connection.execute(
+                    sql.SQL(
+                        "ALTER TABLE {}.artifact_ledger DISABLE TRIGGER artifact_ledger_append_only"
+                    ).format(sql.Identifier(schema))
+                )
+                connection.execute(
+                    sql.SQL("DELETE FROM {}.artifact_ledger").format(sql.Identifier(schema))
+                )
+            rollback = client.get("/api/v1/integrity").json()
+            assert rollback["ledger_checked"] == 0
+            assert rollback["checkpoint_valid"] == 0
+            assert rollback["checkpoint_failures"][0]["reason"] == "missing_sequence"
+            assert rollback["checkpoint_failures"][0]["expected_sha256"] == (
+                checkpoint.payload.ledger_head_sha256
+            )
+
+        with (
+            pytest.raises(psycopg.Error, match="ledger checkpoints are append-only"),
+            psycopg.connect(database_url) as connection,
+        ):
+            connection.execute(
+                sql.SQL("DELETE FROM {}.ledger_checkpoints").format(sql.Identifier(schema))
+            )
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
 
 
 def test_ed25519_artifacts_support_independent_public_verification(database_url: str) -> None:
@@ -1011,6 +1115,9 @@ def test_guardrail_checks_become_tamper_evident_artifacts(
         "ledger_checked": 1,
         "ledger_valid": 1,
         "ledger_failures": [],
+        "checkpoint_checked": 0,
+        "checkpoint_valid": 0,
+        "checkpoint_failures": [],
         "failures": [],
     }
 

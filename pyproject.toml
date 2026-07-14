@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aecontrol"
-version = "0.41.0"
+version = "0.42.0"
 description = "AgentEval Control Plane: deterministic agent evaluation and release gates."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,6 +21,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
+  "boto3>=1.35,<2",
   "cryptography>=48.0.1,<49",
   "fastapi>=0.115,<1",
   "opentelemetry-exporter-otlp-proto-http>=1.35,<2",
@@ -50,7 +51,6 @@ dev = [
   "types-PyYAML>=6.0,<7",
   "langgraph>=1.1,<2",
 ]
-
 [project.scripts]
 aecontrol = "aecontrol.cli:app"
 

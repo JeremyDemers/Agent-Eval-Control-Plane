@@ -1,5 +1,6 @@
 """AgentEval Control Plane public API."""
 
+from aecontrol.checkpoints import CheckpointPublication, SignedLedgerCheckpoint
 from aecontrol.compare import compare_runs
 from aecontrol.engine import EvaluationEngine
 from aecontrol.gate import evaluate_gate
@@ -26,6 +27,7 @@ from aecontrol.tenants import IssuedTenantAPIKey, TenantAPIKeyRecord, TenantReco
 __all__ = [
     "AgentEvalClient",
     "AsyncAgentEvalClient",
+    "CheckpointPublication",
     "EvaluationEngine",
     "ExpectedGuardrailAction",
     "GuardrailConfigActivation",
@@ -39,6 +41,7 @@ __all__ = [
     "LangGraphOutputMapping",
     "LangGraphRuntimeAdapter",
     "NIMClient",
+    "SignedLedgerCheckpoint",
     "StoredGuardrailEvidence",
     "TenantAPIKeyRecord",
     "TenantRecord",

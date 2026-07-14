@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Literal, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg import sql
@@ -16,8 +16,15 @@ from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
+from pydantic import ValidationError
 
 from aecontrol.capacity import forecast_gpu_capacity
+from aecontrol.checkpoints import (
+    LedgerCheckpointPayload,
+    SignedLedgerCheckpoint,
+    checkpoint_payload_digest,
+    verify_checkpoint,
+)
 from aecontrol.database import DatabasePoolSnapshot, DatabaseRuntimeConfiguration
 from aecontrol.demand import DEFAULT_LOOKBACK_DAYS, forecast_gpu_demand
 from aecontrol.guardrails import (
@@ -30,11 +37,13 @@ from aecontrol.guardrails import (
     build_guardrail_efficacy_report,
 )
 from aecontrol.integrity import (
+    ED25519,
     HMAC_SHA256,
     LEDGER_GENESIS_SHA256,
     ArtifactAuthenticityError,
     ArtifactIntegrityError,
     ArtifactKeyring,
+    ArtifactVerificationError,
     artifact_digest,
     ledger_entry_digest,
 )
@@ -50,6 +59,7 @@ from aecontrol.models import (
     GpuDurationEstimate,
     JobPlacementDiagnostic,
     JobStatus,
+    LedgerCheckpointFailure,
     OperationalSnapshot,
     QualityGateDecision,
     RunComparison,
@@ -72,7 +82,7 @@ from aecontrol.tenants import (
     TenantSuspendedError,
 )
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 SIGNED_ARTIFACT_TABLES = ("evaluation_runs", "comparisons", "guardrail_evidence")
 TENANT_TABLES = (
     "evaluation_runs",
@@ -83,6 +93,7 @@ TENANT_TABLES = (
     "evaluation_jobs",
     "workers",
     "artifact_ledger",
+    "ledger_checkpoints",
 )
 
 
@@ -339,6 +350,31 @@ class ArtifactStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS ledger_checkpoints (
+                    tenant_id TEXT,
+                    checkpoint_id UUID NOT NULL,
+                    ledger_sequence BIGINT NOT NULL CHECK (ledger_sequence >= 0),
+                    ledger_entries BIGINT NOT NULL CHECK (ledger_entries >= 0),
+                    ledger_head_sha256 TEXT NOT NULL CHECK (
+                        ledger_head_sha256 ~ '^[a-f0-9]{64}$'
+                    ),
+                    created_at TIMESTAMPTZ NOT NULL,
+                    retention_until TIMESTAMPTZ NOT NULL CHECK (retention_until > created_at),
+                    payload JSONB NOT NULL,
+                    payload_sha256 TEXT NOT NULL CHECK (payload_sha256 ~ '^[a-f0-9]{64}$'),
+                    signature_algorithm TEXT NOT NULL CHECK (signature_algorithm = 'ed25519'),
+                    signing_key_id TEXT NOT NULL,
+                    signature_value TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, checkpoint_id)
+                )
+                """
+            )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_ledger_checkpoints_head
+                   ON ledger_checkpoints(ledger_sequence, ledger_head_sha256, created_at DESC)"""
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS control_plane_tenants (
                     tenant_id TEXT PRIMARY KEY CHECK (
                         tenant_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'
@@ -502,6 +538,7 @@ class ArtifactStore:
             self._backfill_artifact_ledger(connection)
             self._enable_tenant_isolation(connection)
             self._install_ledger_immutability_trigger(connection)
+            self._install_checkpoint_immutability_trigger(connection)
             connection.execute(
                 "ALTER TABLE evaluation_runs ALTER COLUMN payload_sha256 SET NOT NULL"
             )
@@ -513,11 +550,120 @@ class ArtifactStore:
                 )
                 return
             stored_version = cast(int, row["version"])
-            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}:
+            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif stored_version != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {stored_version}"
                 raise RuntimeError(msg)
+
+    def create_ledger_checkpoint(self, retention_days: int = 30) -> SignedLedgerCheckpoint:
+        if not 1 <= retention_days <= 3650:
+            raise ValueError("checkpoint retention must be between 1 and 3650 days")
+        if (
+            self.keyring is None
+            or self.keyring.active_algorithm != ED25519
+            or self.keyring.active_key_id is None
+        ):
+            raise ValueError("ledger checkpoints require an active Ed25519 signing key")
+        self.initialize()
+        tenant_id = current_tenant_id()
+        with self._connect() as connection:
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"{self.schema}:{tenant_id}:artifact-ledger",),
+            )
+            head = connection.execute(
+                """SELECT sequence, entry_sha256 FROM artifact_ledger
+                   ORDER BY sequence DESC LIMIT 1"""
+            ).fetchone()
+            ledger_sequence = cast(int, head["sequence"]) if head is not None else 0
+            ledger_head = str(head["entry_sha256"]) if head is not None else LEDGER_GENESIS_SHA256
+            existing = connection.execute(
+                """
+                SELECT payload, payload_sha256, signature_algorithm, signing_key_id,
+                       signature_value
+                FROM ledger_checkpoints
+                WHERE ledger_sequence = %s AND ledger_head_sha256 = %s
+                  AND created_at >= %s
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (ledger_sequence, ledger_head, datetime.now(UTC) - timedelta(minutes=5)),
+            ).fetchone()
+            if existing is not None:
+                return self._checkpoint_from_row(existing)
+            count_row = connection.execute(
+                "SELECT count(*) AS value FROM artifact_ledger"
+            ).fetchone()
+            ledger_entries = int(str(count_row["value"])) if count_row is not None else 0
+            created_at = datetime.now(UTC)
+            payload = LedgerCheckpointPayload(
+                checkpoint_id=uuid4(),
+                tenant_id=tenant_id,
+                ledger_sequence=ledger_sequence,
+                ledger_entries=ledger_entries,
+                ledger_head_sha256=ledger_head,
+                created_at=created_at,
+                retention_until=created_at + timedelta(days=retention_days),
+            )
+            digest = checkpoint_payload_digest(payload)
+            signature = self.keyring.sign("ledger_checkpoint", payload.checkpoint_id, digest)
+            checkpoint = SignedLedgerCheckpoint(
+                payload=payload,
+                payload_sha256=digest,
+                signing_key_id=self.keyring.active_key_id,
+                signature=signature,
+            )
+            connection.execute(
+                """
+                INSERT INTO ledger_checkpoints (
+                    tenant_id, checkpoint_id, ledger_sequence, ledger_entries,
+                    ledger_head_sha256, created_at, retention_until, payload,
+                    payload_sha256, signature_algorithm, signing_key_id, signature_value
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    tenant_id,
+                    payload.checkpoint_id,
+                    ledger_sequence,
+                    ledger_entries,
+                    ledger_head,
+                    payload.created_at,
+                    payload.retention_until,
+                    Jsonb(payload.model_dump(mode="json")),
+                    digest,
+                    ED25519,
+                    self.keyring.active_key_id,
+                    signature,
+                ),
+            )
+        return checkpoint
+
+    def list_ledger_checkpoints(self) -> list[SignedLedgerCheckpoint]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT payload, payload_sha256, signature_algorithm, signing_key_id,
+                       signature_value
+                FROM ledger_checkpoints ORDER BY ledger_sequence DESC, created_at DESC
+                """
+            ).fetchall()
+        return [self._checkpoint_from_row(row) for row in rows]
+
+    def _checkpoint_from_row(self, row: dict[str, object]) -> SignedLedgerCheckpoint:
+        checkpoint = SignedLedgerCheckpoint(
+            payload=LedgerCheckpointPayload.model_validate(row["payload"]),
+            payload_sha256=str(row["payload_sha256"]),
+            signature_algorithm=cast(Literal["ed25519"], row["signature_algorithm"]),
+            signing_key_id=str(row["signing_key_id"]),
+            signature=str(row["signature_value"]),
+        )
+        if self.keyring is None or not verify_checkpoint(checkpoint, self.keyring):
+            raise ArtifactVerificationError(
+                f"ledger checkpoint {checkpoint.payload.checkpoint_id} failed verification"
+            )
+        return checkpoint
 
     def create_tenant(
         self,
@@ -1269,6 +1415,9 @@ class ArtifactStore:
             ledger_checked, ledger_valid, ledger_head, ledger_failures = (
                 self._verify_artifact_ledger(connection)
             )
+            checkpoint_checked, checkpoint_valid, checkpoint_failures = (
+                self._verify_ledger_checkpoints(connection)
+            )
         return ArtifactIntegrityReport(
             checked=checked,
             valid=checked - len(failures),
@@ -1279,8 +1428,111 @@ class ArtifactStore:
             ledger_valid=ledger_valid,
             ledger_head_sha256=ledger_head,
             ledger_failures=ledger_failures,
+            checkpoint_checked=checkpoint_checked,
+            checkpoint_valid=checkpoint_valid,
+            checkpoint_failures=checkpoint_failures,
             failures=failures,
         )
+
+    def _verify_ledger_checkpoints(
+        self, connection: psycopg.Connection[dict[str, object]]
+    ) -> tuple[int, int, list[LedgerCheckpointFailure]]:
+        rows = connection.execute(
+            """
+            SELECT checkpoint_id, ledger_sequence, ledger_entries, ledger_head_sha256,
+                   created_at, retention_until, payload, payload_sha256,
+                   signature_algorithm, signing_key_id, signature_value
+            FROM ledger_checkpoints ORDER BY ledger_sequence, created_at
+            """
+        ).fetchall()
+        ledger_rows = connection.execute(
+            "SELECT sequence, entry_sha256 FROM artifact_ledger"
+        ).fetchall()
+        heads = {int(str(row["sequence"])): str(row["entry_sha256"]) for row in ledger_rows}
+        heads[0] = LEDGER_GENESIS_SHA256
+        failures: list[LedgerCheckpointFailure] = []
+        for row in rows:
+            checkpoint_id = cast(UUID, row["checkpoint_id"])
+            sequence = int(str(row["ledger_sequence"]))
+            try:
+                payload = LedgerCheckpointPayload.model_validate(row["payload"])
+            except ValidationError:
+                failures.append(
+                    LedgerCheckpointFailure(
+                        checkpoint_id=checkpoint_id,
+                        ledger_sequence=sequence,
+                        reason="envelope",
+                    )
+                )
+                continue
+            digest = checkpoint_payload_digest(payload)
+            expected_digest = str(row["payload_sha256"])
+            failure: LedgerCheckpointFailure | None = None
+            if not hmac.compare_digest(digest, expected_digest):
+                failure = LedgerCheckpointFailure(
+                    checkpoint_id=checkpoint_id,
+                    ledger_sequence=sequence,
+                    reason="payload_digest",
+                    expected_sha256=expected_digest,
+                    actual_sha256=digest,
+                )
+            else:
+                try:
+                    checkpoint = SignedLedgerCheckpoint(
+                        payload=payload,
+                        payload_sha256=expected_digest,
+                        signature_algorithm=cast(Literal["ed25519"], row["signature_algorithm"]),
+                        signing_key_id=str(row["signing_key_id"]),
+                        signature=str(row["signature_value"]),
+                    )
+                except ValidationError:
+                    failures.append(
+                        LedgerCheckpointFailure(
+                            checkpoint_id=checkpoint_id,
+                            ledger_sequence=sequence,
+                            reason="envelope",
+                        )
+                    )
+                    continue
+                if self.keyring is None or not verify_checkpoint(checkpoint, self.keyring):
+                    failure = LedgerCheckpointFailure(
+                        checkpoint_id=checkpoint_id,
+                        ledger_sequence=sequence,
+                        reason="signature",
+                    )
+                elif (
+                    payload.checkpoint_id != checkpoint_id
+                    or payload.tenant_id != current_tenant_id()
+                    or payload.ledger_sequence != sequence
+                    or payload.ledger_entries != int(str(row["ledger_entries"]))
+                    or payload.ledger_entries != sequence
+                    or payload.ledger_head_sha256 != str(row["ledger_head_sha256"])
+                    or payload.created_at != row["created_at"]
+                    or payload.retention_until != row["retention_until"]
+                ):
+                    failure = LedgerCheckpointFailure(
+                        checkpoint_id=checkpoint_id,
+                        ledger_sequence=sequence,
+                        reason="envelope",
+                    )
+                elif sequence not in heads:
+                    failure = LedgerCheckpointFailure(
+                        checkpoint_id=checkpoint_id,
+                        ledger_sequence=sequence,
+                        reason="missing_sequence",
+                        expected_sha256=payload.ledger_head_sha256,
+                    )
+                elif not hmac.compare_digest(heads[sequence], payload.ledger_head_sha256):
+                    failure = LedgerCheckpointFailure(
+                        checkpoint_id=checkpoint_id,
+                        ledger_sequence=sequence,
+                        reason="head_mismatch",
+                        expected_sha256=payload.ledger_head_sha256,
+                        actual_sha256=heads[sequence],
+                    )
+            if failure is not None:
+                failures.append(failure)
+        return len(rows), len(rows) - len(failures), failures
 
     @staticmethod
     def _verify_artifact_ledger(
@@ -2056,6 +2308,29 @@ class ArtifactStore:
             """CREATE TRIGGER artifact_ledger_append_only
                BEFORE UPDATE OR DELETE ON artifact_ledger
                FOR EACH ROW EXECUTE FUNCTION reject_artifact_ledger_mutation()"""
+        )
+
+    @staticmethod
+    def _install_checkpoint_immutability_trigger(
+        connection: psycopg.Connection[dict[str, object]],
+    ) -> None:
+        connection.execute(
+            """
+            CREATE OR REPLACE FUNCTION reject_ledger_checkpoint_mutation()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RAISE EXCEPTION 'ledger checkpoints are append-only';
+            END;
+            $$
+            """
+        )
+        connection.execute(
+            "DROP TRIGGER IF EXISTS ledger_checkpoints_append_only ON ledger_checkpoints"
+        )
+        connection.execute(
+            """CREATE TRIGGER ledger_checkpoints_append_only
+               BEFORE UPDATE OR DELETE ON ledger_checkpoints
+               FOR EACH ROW EXECUTE FUNCTION reject_ledger_checkpoint_mutation()"""
         )
 
     def _backfill_artifact_ledger(self, connection: psycopg.Connection[dict[str, object]]) -> None:

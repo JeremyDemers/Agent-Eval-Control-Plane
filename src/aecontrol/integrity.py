@@ -28,14 +28,17 @@ _SIGNATURE_CONTEXT = "aecontrol:v1"
 
 
 def artifact_digest(payload: Any) -> str:
-    canonical = json.dumps(
+    return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+
+def canonical_json_bytes(payload: Any) -> bytes:
+    return json.dumps(
         _normalize_json(payload),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
         allow_nan=False,
     ).encode()
-    return hashlib.sha256(canonical).hexdigest()
 
 
 def ledger_entry_digest(
