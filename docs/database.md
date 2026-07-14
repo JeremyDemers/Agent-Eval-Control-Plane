@@ -206,3 +206,13 @@ through the latest archived WAL each Sunday, runs the same verifier, publishes i
 an S3 Object Lock bucket, removes successful candidates, and retains at most two failed candidates.
 It uses a namespaced Role limited to CloudNativePG Clusters and Kubernetes Jobs. See the scheduled
 drill section in [`recovery-verification.md`](recovery-verification.md) before enabling it.
+
+## Cross-Region Promotion
+
+The optional `cloudnative-pg-distributed` deployment adds a three-instance regional replica, distinct
+primary and secondary archives, single-resource promotion RBAC, and an excluded guarded promotion
+Job. Planned switchover uses CloudNativePG's demotion/promotion token protocol; the command verifies
+the target topology, system identifier, readiness, operator-version policy, and Kubernetes
+`resourceVersion` before submitting the promotion fields together. See
+[`cross-region-recovery.md`](cross-region-recovery.md) for deployment, fencing, immutable object-copy,
+application cutover, tokenless failover, reversal, and evidence procedures.

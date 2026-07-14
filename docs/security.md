@@ -111,7 +111,7 @@ host-administrator control. See [`evidence-checkpoints.md`](evidence-checkpoints
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.48.0
+development-only tools so its result describes the shipped runtime environment. The v0.49.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults

@@ -76,7 +76,7 @@ class FakeKubernetesClient:
 def _configuration() -> RecoveryDrillConfiguration:
     return RecoveryDrillConfiguration(
         namespace="aecontrol",
-        verifier_image="ghcr.io/example/aecontrol:0.48.0",
+        verifier_image="ghcr.io/example/aecontrol:0.49.0",
         max_failed_drills=2,
     )
 
@@ -171,7 +171,7 @@ def test_recovery_drill_configuration_is_strict_and_bounded(
 ) -> None:
     options: dict[str, object] = {
         "namespace": "aecontrol",
-        "verifier_image": "ghcr.io/example/aecontrol:0.48.0",
+        "verifier_image": "ghcr.io/example/aecontrol:0.49.0",
         **updates,
     }
     with pytest.raises(ValueError, match=message):
@@ -185,7 +185,7 @@ def test_recovery_drill_configuration_loads_namespace_and_bounds_from_environmen
     namespace.write_text("aecontrol\n")
     monkeypatch.setenv("AECONTROL_KUBERNETES_NAMESPACE_FILE", str(namespace))
     monkeypatch.setenv(
-        "AECONTROL_RECOVERY_DRILL_VERIFIER_IMAGE", "ghcr.io/example/aecontrol:0.48.0"
+        "AECONTROL_RECOVERY_DRILL_VERIFIER_IMAGE", "ghcr.io/example/aecontrol:0.49.0"
     )
     monkeypatch.setenv("AECONTROL_RECOVERY_DRILL_MAX_FAILED", "3")
 
@@ -224,6 +224,7 @@ def test_in_cluster_client_bounds_responses_and_sanitizes_http_errors(
     def successful_urlopen(request, **_kwargs):  # type: ignore[no-untyped-def]
         captured["url"] = request.full_url
         captured["authorization"] = request.get_header("Authorization")
+        captured["content_type"] = request.get_header("Content-type")
         return _Response(b'{"status":{"succeeded":1}}')
 
     monkeypatch.setattr("aecontrol.recovery_drill.urlopen", successful_urlopen)
@@ -234,6 +235,9 @@ def test_in_cluster_client_bounds_responses_and_sanitizes_http_errors(
     assert job == {"status": {"succeeded": 1}}
     assert captured["url"].endswith("/apis/batch/v1/namespaces/aecontrol/jobs/drill-verify")
     assert captured["authorization"] == "Bearer token"
+
+    client.patch_cluster("aecontrol", "aecontrol-postgres-secondary", {"spec": {}})
+    assert captured["content_type"] == "application/merge-patch+json"
 
     monkeypatch.setattr(
         "aecontrol.recovery_drill.urlopen",

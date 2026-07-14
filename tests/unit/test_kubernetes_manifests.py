@@ -426,6 +426,93 @@ def test_scheduled_recovery_drill_has_least_privilege_rbac_and_bounded_lifecycle
     assert "report-secret.example.yaml" not in kustomization["resources"]
 
 
+def test_distributed_postgres_overlay_is_symmetric_and_promotion_is_opt_in() -> None:
+    root = Path("deploy/overlays/cloudnative-pg-distributed")
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
+    assert kustomization["images"][0]["newTag"] == project["project"]["version"]
+    assert "promotion-job.example.yaml" not in kustomization["resources"]
+    assert "promotion-token-secret.example.yaml" not in kustomization["resources"]
+    assert "primary-topology-patch.example.yaml" not in kustomization["resources"]
+    assert "application-secret.example.yaml" not in kustomization["resources"]
+
+    cluster = yaml.safe_load((root / "secondary-cluster.yaml").read_text())
+    spec = cluster["spec"]
+    assert cluster["metadata"]["name"] == "aecontrol-postgres-secondary"
+    assert spec["instances"] == 3
+    assert spec["bootstrap"] == {
+        "recovery": {
+            "source": "aecontrol-postgres",
+            "database": "aecontrol",
+            "owner": "aecontrol",
+            "secret": {"name": "aecontrol-postgres-app-credentials"},
+        }
+    }
+    assert spec["replica"] == {
+        "self": "aecontrol-postgres-secondary",
+        "primary": "aecontrol-postgres",
+        "source": "aecontrol-postgres",
+    }
+    external = {item["name"]: item for item in spec["externalClusters"]}
+    assert set(external) == {"aecontrol-postgres", "aecontrol-postgres-secondary"}
+    assert external["aecontrol-postgres"]["plugin"]["parameters"] == {
+        "barmanObjectName": "aecontrol-postgres-primary-archive",
+        "serverName": "aecontrol-postgres",
+    }
+    assert spec["plugins"][0]["isWALArchiver"] is True
+    assert spec["plugins"][0]["parameters"]["barmanObjectName"] == (
+        "aecontrol-postgres-secondary-archive"
+    )
+
+    stores = [
+        yaml.safe_load((root / name).read_text())
+        for name in ("primary-archive.yaml", "secondary-archive.yaml")
+    ]
+    assert {item["metadata"]["name"] for item in stores} == {
+        "aecontrol-postgres-primary-archive",
+        "aecontrol-postgres-secondary-archive",
+    }
+    assert all(item["spec"]["retentionPolicy"] == "30d" for item in stores)
+    assert all(item["spec"]["configuration"]["wal"]["encryption"] == "AES256" for item in stores)
+
+    role = yaml.safe_load((root / "role.yaml").read_text())
+    assert role["rules"] == [
+        {
+            "apiGroups": ["postgresql.cnpg.io"],
+            "resources": ["clusters"],
+            "resourceNames": ["aecontrol-postgres-secondary"],
+            "verbs": ["get", "patch"],
+        }
+    ]
+    job = yaml.safe_load((root / "promotion-job.example.yaml").read_text())
+    assert job["spec"]["backoffLimit"] == 0
+    pod = job["spec"]["template"]["spec"]
+    assert pod["serviceAccountName"] == "aecontrol-postgres-promoter"
+    container = pod["containers"][0]
+    assert container["image"].endswith(f":{project['project']['version']}")
+    assert container["args"] == ["promote-replica", "--json"]
+    assert container["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+        "readOnlyRootFilesystem": True,
+    }
+    environment = {item["name"]: item for item in container["env"]}
+    assert environment["AECONTROL_PROMOTION_TOKEN_FILE"]["value"].endswith("/token")
+    assert environment["AECONTROL_PROMOTION_EXPECTED_OPERATOR_VERSION"]["value"] == (
+        "REPLACE_WITH_OPERATOR_VERSION"
+    )
+
+    primary_patch = yaml.safe_load((root / "primary-topology-patch.example.yaml").read_text())
+    primary_external = {item["name"]: item for item in primary_patch["spec"]["externalClusters"]}
+    assert primary_external["aecontrol-postgres"]["plugin"]["parameters"] == {
+        "barmanObjectName": "aecontrol-postgres-backup",
+        "serverName": "aecontrol-postgres",
+    }
+    application_secret = yaml.safe_load((root / "application-secret.example.yaml").read_text())
+    assert application_secret["type"] == "kubernetes.io/basic-auth"
+    assert application_secret["stringData"]["username"] == "aecontrol"
+
+
 def test_cloudnative_pg_pitr_monitoring_alerts_on_failed_and_stale_backups() -> None:
     root = Path("deploy/overlays/cloudnative-pg-pitr-monitoring")
     kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
