@@ -89,7 +89,9 @@ def test_aws_kms_keyring_signs_remotely_and_verifies_offline() -> None:
         (None, "invalid signing response"),
         ({}, "unexpected signing key"),
         (
-            {"KeyId": "arn:aws:kms:us-east-2:123456789012:key/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+            {
+                "KeyId": "arn:aws:kms:us-east-2:123456789012:key/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            },
             "unexpected signing key",
         ),
         ({"KeyId": KEY_ARN, "SigningAlgorithm": "ECDSA_SHA_256"}, "unexpected signing algorithm"),
@@ -107,9 +109,7 @@ def test_aws_kms_keyring_signs_remotely_and_verifies_offline() -> None:
         ),
     ],
 )
-def test_aws_kms_signer_rejects_untrusted_responses(
-    response: object, message: str
-) -> None:
+def test_aws_kms_signer_rejects_untrusted_responses(response: object, message: str) -> None:
     class Client:
         @staticmethod
         def sign(**_request: object) -> object:

@@ -59,9 +59,7 @@ class AWSKMSSigner:
         self.key_id = key_id
 
     @classmethod
-    def from_configuration(
-        cls, configuration: AWSKMSConfiguration, key_id: str
-    ) -> AWSKMSSigner:
+    def from_configuration(cls, configuration: AWSKMSConfiguration, key_id: str) -> AWSKMSSigner:
         try:
             import boto3  # type: ignore[import-untyped]
             from botocore.config import Config  # type: ignore[import-untyped]

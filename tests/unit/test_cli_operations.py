@@ -99,10 +99,7 @@ def test_doctor_reports_sanitized_vault_transit_signer(monkeypatch) -> None:  # 
 
 def test_doctor_reports_sanitized_aws_kms_signer(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _, public_key = generate_ed25519_keypair()
-    key_arn = (
-        "arn:aws:kms:us-east-2:123456789012:"
-        "key/12345678-1234-1234-1234-1234567890ab"
-    )
+    key_arn = "arn:aws:kms:us-east-2:123456789012:key/12345678-1234-1234-1234-1234567890ab"
     monkeypatch.setattr("boto3.client", lambda *_args, **_kwargs: object())
     monkeypatch.setenv(SIGNING_KEY_ID_ENV, "kms-evidence")
     monkeypatch.setenv(SIGNING_ALGORITHM_ENV, ED25519)

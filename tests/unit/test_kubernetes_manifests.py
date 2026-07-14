@@ -205,9 +205,7 @@ def test_aws_kms_overlay_uses_workload_identity_without_private_keys() -> None:
         assert pod["serviceAccountName"] == "aecontrol-kms-signer"
         environment = {item["name"]: item for item in pod["containers"][0]["env"]}
         assert environment["AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS"]["$patch"] == "delete"
-        assert environment["AECONTROL_ARTIFACT_AWS_KMS_KEY_ARN"]["value"].startswith(
-            "arn:aws:kms:"
-        )
+        assert environment["AECONTROL_ARTIFACT_AWS_KMS_KEY_ARN"]["value"].startswith("arn:aws:kms:")
         assert environment["AECONTROL_ARTIFACT_AWS_KMS_TIMEOUT_SECONDS"]["value"] == "5"
 
     kustomization = yaml.safe_load((root / "kustomization.yaml").read_text())
