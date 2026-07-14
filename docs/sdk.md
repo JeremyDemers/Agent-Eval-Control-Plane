@@ -53,6 +53,11 @@ credential. Tenant admins use `tenant`, `tenant_api_keys`, `issue_tenant_api_key
 asynchronous client has matching coroutine methods. See
 [`tenant-lifecycle.md`](tenant-lifecycle.md) for scope separation and rotation invariants.
 
+Quota automation uses `tenant_quota` and `set_tenant_quota` with an `operator` credential. Tenants
+call `current_tenant_quota` to retrieve their typed policy and live queue, rolling submission, active
+lease, and CUDA lease usage. The asynchronous client exposes matching coroutines. See
+[`tenant-quotas.md`](tenant-quotas.md).
+
 Evidence automation uses `publish_ledger_checkpoint(retention_days=90)` to sign and publish the
 current tenant head, and `ledger_checkpoints()` to retrieve public-verifiable envelopes. The async
 client exposes matching coroutines. See [`evidence-checkpoints.md`](evidence-checkpoints.md).

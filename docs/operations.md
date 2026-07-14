@@ -36,6 +36,11 @@ configuration returns `503`, and persisted checkpoints remain retryable under de
 keys. Operators should alert on both statuses. See
 [`evidence-checkpoints.md`](evidence-checkpoints.md).
 
+`GET /api/v1/tenant/quota` reports bounded tenant-local admission usage. Alerting systems should
+compare usage with the returned optional limits rather than deriving tenancy from metric labels;
+AgentEval intentionally avoids exposing tenant identifiers through the unauthenticated Prometheus
+endpoint. See [`tenant-quotas.md`](tenant-quotas.md).
+
 Every HTTP response includes `X-Request-ID` and `Server-Timing`. A caller-supplied request ID is
 preserved when it contains at most 64 alphanumeric, dot, underscore, or hyphen characters; otherwise
 the service generates a UUID. Structured request logs include that ID, method, path, status, and

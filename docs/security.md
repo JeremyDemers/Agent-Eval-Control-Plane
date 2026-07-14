@@ -73,6 +73,12 @@ namespace. Suspension fails closed, plaintext dynamic keys are returned once, an
 revocation preserves at least one active admin. The application database role can still read stored
 digests and remains trusted. See [`tenant-lifecycle.md`](tenant-lifecycle.md).
 
+Schema v17 keeps quota policy in the operator-controlled registry while calculating usage under the
+authenticated tenant's forced-RLS context. Submission and lease checks share a tenant-specific
+transaction advisory lock with the state transition, preventing concurrent replicas from exceeding
+configured limits. Quotas govern control-plane admission; they do not replace NVIDIA device
+isolation or terminate work already holding a lease. See [`tenant-quotas.md`](tenant-quotas.md).
+
 ## Evidence Boundary
 
 Ed25519 signatures let independent auditors verify artifacts without private signing authority.
@@ -99,7 +105,7 @@ host-administrator control. See [`evidence-checkpoints.md`](evidence-checkpoints
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.42.0
+development-only tools so its result describes the shipped runtime environment. The v0.43.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults

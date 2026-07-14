@@ -33,6 +33,8 @@ same tests against a PostgreSQL service container.
 Evaluation admission is decoupled from execution through durable jobs. Workers claim priority-ordered
 rows with `FOR UPDATE SKIP LOCKED`, heartbeat expiring leases, and retry failures up to a per-job
 budget. This design supports horizontal worker scaling without introducing a separate queue service.
+Schema v17 wraps tenant quota checks and state transitions in a tenant-local transaction advisory
+lock, preserving queue, total execution, and CUDA concurrency limits across replicas.
 
 Workers register normalized CPU, NVIDIA GPU, and operator-label capabilities. Accelerator and label
 requirements are evaluated inside the atomic claim query, keeping incompatible jobs out of a worker's

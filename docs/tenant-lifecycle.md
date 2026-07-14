@@ -65,7 +65,8 @@ operators need global lifecycle inventory. They are reachable through applicatio
 `operator` or tenant-local `admin`, but the application database role can read their digests. Database
 credentials therefore remain a trusted operator asset and should be isolated from tenant workloads.
 
-The registry does not provide quotas, billing, invitation workflows, OIDC federation, or automatic
-worker-pool provisioning. Production deployments should keep the bootstrap operator key in a secret
-manager, rotate it through configuration rollout, terminate TLS before the API, and audit operator
-requests through the structured key ID and request ID logs.
+Schema v17 adds resource quotas through a separate operator-owned policy table; see
+[`tenant-quotas.md`](tenant-quotas.md). The registry does not provide billing, invitation workflows,
+OIDC federation, or automatic worker-pool provisioning. Production deployments should keep the
+bootstrap operator key in a secret manager, rotate it through configuration rollout, terminate TLS
+before the API, and audit operator requests through the structured key ID and request ID logs.

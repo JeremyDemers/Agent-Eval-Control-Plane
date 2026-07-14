@@ -22,7 +22,14 @@ from aecontrol.langgraph import (
 )
 from aecontrol.nim import NIMClient
 from aecontrol.sdk import AgentEvalClient, AsyncAgentEvalClient
-from aecontrol.tenants import IssuedTenantAPIKey, TenantAPIKeyRecord, TenantRecord
+from aecontrol.tenants import (
+    IssuedTenantAPIKey,
+    TenantAPIKeyRecord,
+    TenantQuotaLimits,
+    TenantQuotaRecord,
+    TenantQuotaStatus,
+    TenantRecord,
+)
 
 __all__ = [
     "AgentEvalClient",
@@ -44,6 +51,9 @@ __all__ = [
     "SignedLedgerCheckpoint",
     "StoredGuardrailEvidence",
     "TenantAPIKeyRecord",
+    "TenantQuotaLimits",
+    "TenantQuotaRecord",
+    "TenantQuotaStatus",
     "TenantRecord",
     "compare_runs",
     "evaluate_gate",

@@ -91,6 +91,8 @@
   transactional rotation, revocation history, and fail-closed suspension.
 - Ed25519 ledger-head checkpoints with create-only local export, S3 Object Lock compliance retention,
   idempotent publication, and privileged rollback detection.
+- Operator-managed tenant queue, rolling submission-rate, execution, and CUDA lease quotas with
+  atomic multi-replica enforcement and tenant-visible usage.
 
 ## Verification
 
