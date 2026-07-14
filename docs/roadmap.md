@@ -49,10 +49,10 @@ Implemented ahead of the original four-day scope:
 - Privacy-bounded cross-tenant CPU/CUDA fleet analytics with transactional PostgreSQL rollups
 - Version-pinned Vault Transit Ed25519 signing with offline public-key verification
 - Scheduled CloudNativePG restore drills with immutable report archival and bounded cleanup
+- Cross-region CloudNativePG distributed topology with guarded, token-bound replica promotion
 
 Next stages:
 
 - VM or microVM isolation for actively hostile candidate code
-- Cross-region PostgreSQL replica promotion and recovery-object replication
 - Additional hosted provider authentication and endpoint-specific adapters
 - Cross-region evidence replication and direct cloud KMS/HSM signing adapters

@@ -37,6 +37,7 @@ from aecontrol.models import Accelerator, EvaluationRun, GateOutcome, JobStatus,
 from aecontrol.nim import NIMClient
 from aecontrol.ollama import OllamaClient, OllamaError
 from aecontrol.openai_compatible import OpenAICompatibleClient, OpenAICompatibleError
+from aecontrol.promotion import PromotionConfiguration, PromotionError, PromotionOrchestrator
 from aecontrol.recovery import (
     DEFAULT_MAX_CHECKPOINT_AGE_HOURS,
     DEFAULT_MAX_LEDGER_ENTRIES,
@@ -110,6 +111,23 @@ def recovery_drill(json_output: bool = typer.Option(False, "--json")) -> None:
         return
     console.print(f"recovery drill {outcome.drill_id} passed in {outcome.duration_seconds:.1f}s")
     console.print("report archived: true; restored cluster deleted: true")
+
+
+@app.command("promote-replica")
+def promote_replica(json_output: bool = typer.Option(False, "--json")) -> None:
+    """Guard and execute one in-cluster CloudNativePG controlled promotion."""
+    try:
+        outcome = PromotionOrchestrator(
+            PromotionConfiguration.from_environment(),
+            InClusterKubernetesClient.from_environment(),
+        ).run()
+    except (PromotionError, RecoveryDrillError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    if json_output:
+        console.print(outcome.model_dump_json(indent=2))
+        return
+    console.print(f"promoted {outcome.target_cluster} from {outcome.source_cluster}")
+    console.print(f"promotion token sha256: {outcome.token_sha256}")
 
 
 @app.command()

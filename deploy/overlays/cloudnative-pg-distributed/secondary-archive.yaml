@@ -1,0 +1,27 @@
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: aecontrol-postgres-secondary-archive
+spec:
+  configuration:
+    destinationPath: s3://replace-with-secondary-region-bucket/aecontrol
+    s3Credentials:
+      accessKeyId:
+        name: aecontrol-secondary-archive-s3
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: aecontrol-secondary-archive-s3
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: gzip
+      encryption: AES256
+      maxParallel: 8
+    data:
+      compression: gzip
+      encryption: AES256
+  retentionPolicy: 30d
+  instanceSidecarConfiguration:
+    retentionPolicyIntervalSeconds: 1800
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}

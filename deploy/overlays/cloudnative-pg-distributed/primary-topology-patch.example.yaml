@@ -1,0 +1,22 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: aecontrol-postgres
+spec:
+  externalClusters:
+    - name: aecontrol-postgres
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: aecontrol-postgres-backup
+          serverName: aecontrol-postgres
+    - name: aecontrol-postgres-secondary
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: aecontrol-postgres-secondary-archive
+          serverName: aecontrol-postgres-secondary
+  replica:
+    self: aecontrol-postgres
+    primary: aecontrol-postgres
+    source: aecontrol-postgres-secondary

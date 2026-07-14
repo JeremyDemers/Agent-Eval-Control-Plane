@@ -207,6 +207,14 @@ class InClusterKubernetesClient:
             f"/apis/postgresql.cnpg.io/v1/namespaces/{quote(namespace)}/clusters/{quote(name)}",
         )
 
+    def patch_cluster(self, namespace: str, name: str, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request(
+            "PATCH",
+            f"/apis/postgresql.cnpg.io/v1/namespaces/{quote(namespace)}/clusters/{quote(name)}",
+            body,
+            content_type="application/merge-patch+json",
+        )
+
     def list_clusters(self, namespace: str, label_selector: str) -> list[dict[str, Any]]:
         query = urlencode({"labelSelector": label_selector})
         response = self._request(
@@ -249,6 +257,7 @@ class InClusterKubernetesClient:
         body: dict[str, Any] | None = None,
         *,
         allow_not_found: bool = False,
+        content_type: str = "application/json",
     ) -> dict[str, Any]:
         encoded = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
         request = Request(  # noqa: S310 - base URL is constrained to in-cluster HTTPS.
@@ -258,7 +267,7 @@ class InClusterKubernetesClient:
             headers={
                 "Accept": "application/json",
                 "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
+                "Content-Type": content_type,
             },
         )
         try:

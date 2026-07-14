@@ -23,6 +23,8 @@
 - README includes a generated screenshot of the blocked HTML report.
 - Agent versions are explicit strategy classes with example metadata.
 - PostgreSQL-backed API and browser trace explorer are implemented.
+- Cross-region CloudNativePG controlled promotion is guarded by token, topology, system-ID, and
+  optimistic-concurrency validation.
 
 ## Implemented
 

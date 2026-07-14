@@ -9,4 +9,4 @@ resources:
   - cronjob.yaml
 images:
   - name: ghcr.io/jeremydemers/agent-eval-control-plane
-    newTag: 0.48.0
+    newTag: 0.49.0
