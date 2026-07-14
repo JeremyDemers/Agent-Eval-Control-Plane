@@ -24,7 +24,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: verifier
-          image: ghcr.io/jeremydemers/agent-eval-control-plane:0.50.0
+          image: ghcr.io/jeremydemers/agent-eval-control-plane:0.51.0
           imagePullPolicy: IfNotPresent
           command: [/app/.venv/bin/aecontrol]
           args:

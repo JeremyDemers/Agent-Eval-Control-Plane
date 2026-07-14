@@ -3,7 +3,9 @@ kind: Kustomization
 namespace: aecontrol
 resources:
   - ../../kubernetes
-  - workers.yaml
+  - service-account.yaml
+patches:
+  - path: workloads.yaml
 images:
   - name: ghcr.io/jeremydemers/agent-eval-control-plane
     newTag: 0.51.0

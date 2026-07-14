@@ -39,4 +39,4 @@ patches:
         value: uri
 images:
   - name: ghcr.io/jeremydemers/agent-eval-control-plane
-    newTag: 0.50.0
+    newTag: 0.51.0

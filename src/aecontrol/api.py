@@ -49,7 +49,7 @@ from aecontrol.guardrails import (
     StoredGuardrailEvidence,
     StoredGuardrailEvidenceSummary,
 )
-from aecontrol.integrity import ArtifactKeyring, ArtifactVerificationError
+from aecontrol.integrity import ArtifactKeyring, ArtifactSigningError, ArtifactVerificationError
 from aecontrol.models import (
     MIG_PROFILE_PATTERN,
     Accelerator,
@@ -92,7 +92,6 @@ from aecontrol.tenants import (
     TenantSuspendedError,
 )
 from aecontrol.tracing import span
-from aecontrol.vault import VaultTransitError
 
 DEFAULT_DATABASE_URL = "postgresql://aecontrol@127.0.0.1:55432/aecontrol"
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -232,9 +231,9 @@ def create_app(
     application.state.guardrails_client = guardrails
     application.state.checkpoint_sink = resolved_checkpoint_sink
 
-    @application.exception_handler(VaultTransitError)
-    async def vault_signing_unavailable(
-        _request: Request, _error: VaultTransitError
+    @application.exception_handler(ArtifactSigningError)
+    async def remote_signing_unavailable(
+        _request: Request, _error: ArtifactSigningError
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

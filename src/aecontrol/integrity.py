@@ -88,6 +88,10 @@ class ArtifactVerificationError(RuntimeError):
     """A persisted artifact cannot be trusted and must not be returned."""
 
 
+class ArtifactSigningError(RuntimeError):
+    """A remote signer could not produce a locally verifiable signature."""
+
+
 class ArtifactIntegrityError(ArtifactVerificationError):
     def __init__(
         self,
@@ -225,12 +229,22 @@ class ArtifactKeyring:
         active_algorithm = os.getenv(SIGNING_ALGORITHM_ENV)
         encoded_private_keys = os.getenv(ED25519_PRIVATE_KEYS_ENV)
         encoded_public_keys = os.getenv(ED25519_PUBLIC_KEYS_ENV)
+        from aecontrol.aws_kms import AWSKMSSigner, aws_kms_configuration_from_environment
         from aecontrol.vault import VaultTransitSigner, vault_configuration_from_environment
 
         vault = vault_configuration_from_environment()
+        aws_kms = aws_kms_configuration_from_environment()
+        if vault is not None and aws_kms is not None:
+            raise ValueError("Vault Transit and AWS KMS artifact signing are mutually exclusive")
         new_configuration = any(
             value is not None
-            for value in (active_algorithm, encoded_private_keys, encoded_public_keys, vault)
+            for value in (
+                active_algorithm,
+                encoded_private_keys,
+                encoded_public_keys,
+                vault,
+                aws_kms,
+            )
         )
         if not new_configuration and encoded_keys is None and active_key_id is None:
             return None
@@ -251,12 +265,14 @@ class ArtifactKeyring:
             )
         if vault is not None and (active_key_id is None or active_algorithm != ED25519):
             raise ValueError("Vault Transit requires an active Ed25519 signing key configuration")
+        if aws_kms is not None and (active_key_id is None or active_algorithm != ED25519):
+            raise ValueError("AWS KMS requires an active Ed25519 signing key configuration")
         public_keys = _decode_optional_key_map(ED25519_PUBLIC_KEYS_ENV, encoded_public_keys)
-        remote_signer = (
-            VaultTransitSigner(vault, active_key_id)
-            if vault is not None and active_key_id is not None
-            else None
-        )
+        remote_signer: ArtifactSigner | None = None
+        if vault is not None and active_key_id is not None:
+            remote_signer = VaultTransitSigner(vault, active_key_id)
+        elif aws_kms is not None and active_key_id is not None:
+            remote_signer = AWSKMSSigner.from_configuration(aws_kms, active_key_id)
         return cls(
             _decode_optional_key_map(SIGNING_KEYS_ENV, encoded_keys),
             active_key_id,
@@ -277,7 +293,19 @@ class ArtifactKeyring:
                 self._hmac_keys[self.active_key_id], message, hashlib.sha256
             ).hexdigest()
         if self._remote_signer is not None:
-            return self._remote_signer.sign(message)
+            signature = self._remote_signer.sign(message)
+            if not self.verify(
+                self.active_algorithm,
+                self.active_key_id,
+                artifact_type,
+                artifact_id,
+                payload_sha256,
+                signature,
+            ):
+                raise ArtifactSigningError(
+                    "remote artifact signer returned a signature that failed local verification"
+                )
+            return signature
         return b64encode(self._ed25519_private_keys[self.active_key_id].sign(message)).decode()
 
     def verify(

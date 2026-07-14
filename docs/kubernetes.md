@@ -29,7 +29,7 @@ drops all Linux capabilities. Cluster policy should enforce these fields at admi
 tested `Localhost` seccomp or AppArmor profile where the workload threat model requires tighter
 syscall controls.
 
-The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.50.0`. Tagged releases publish
+The default image is `ghcr.io/jeremydemers/agent-eval-control-plane:0.51.0`. Tagged releases publish
 multi-layer OCI images with an SBOM and build provenance. Override the image in an environment overlay
 when promoting by digest.
 
@@ -38,6 +38,12 @@ pods, mounts an externally managed Vault token Secret read-only, and pins one Tr
 Create `aecontrol-vault-token` through Vault Kubernetes auth, an external secret manager, or the
 excluded example only in an isolated environment; then patch the Vault address, CA trust, key, and
 version before applying the overlay. See [`vault-transit-signing.md`](vault-transit-signing.md).
+
+`deploy/overlays/aws-kms` provides the equivalent private-key-free path using a dedicated
+IRSA-ready ServiceAccount and one immutable KMS key ARN. Replace the example role and key ARNs, retain
+the public verification map in the existing Secret, and apply the overlay. Runtime IAM needs only
+`kms:Sign` on that key with an `ED25519_SHA_512` condition. See
+[`aws-kms-signing.md`](aws-kms-signing.md).
 
 OIDC federation is configured on API pods with non-secret issuer metadata. Keep the static operator
 credential in the existing authentication Secret; federated tokens cannot replace bootstrap control:

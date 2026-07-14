@@ -62,6 +62,10 @@ The active private key can instead remain inside Vault Transit. AgentEval pins t
 stores the same base64 Ed25519 envelope, and continues to verify locally using public keys. See
 [`vault-transit-signing.md`](vault-transit-signing.md).
 
+AWS KMS can retain the same key material behind an immutable key ARN and short-lived workload
+credentials. AgentEval fixes `ED25519_SHA_512` with raw-message signing, checks response identity and
+shape, and verifies each result locally before commit. See [`aws-kms-signing.md`](aws-kms-signing.md).
+
 ## Rotation and HMAC Compatibility
 
 1. Retain every public key referenced by stored Ed25519 evidence.
@@ -85,6 +89,6 @@ record. Ed25519 lets auditors verify with non-secret material and prevents a com
 or PostgreSQL writer from forging evidence.
 
 An attacker who compromises an active local private key can still forge signatures. Vault Transit
-removes that key from AgentEval, but a compromised workload can use its token to request signatures
-until the token is revoked. Database rows are not retention locked. Export signed envelopes to
-versioned, retention-locked object storage; direct cloud KMS/HSM adapters remain future work.
+and AWS KMS remove that key from AgentEval, but a compromised authorized workload can request
+signatures until its token or role is revoked. Database rows are not retention locked. Export signed
+envelopes to independently administered, versioned, retention-locked object storage.

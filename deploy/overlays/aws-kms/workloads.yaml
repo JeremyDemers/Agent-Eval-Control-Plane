@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      serviceAccountName: aecontrol-kms-signer
+      containers:
+        - name: api
+          env:
+            - name: AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS
+              $patch: delete
+            - name: AECONTROL_ARTIFACT_AWS_KMS_KEY_ARN
+              value: arn:aws:kms:us-east-2:123456789012:key/12345678-1234-1234-1234-1234567890ab
+            - name: AECONTROL_ARTIFACT_AWS_KMS_TIMEOUT_SECONDS
+              value: "5"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-worker
+spec:
+  template:
+    spec:
+      serviceAccountName: aecontrol-kms-signer
+      containers:
+        - name: worker
+          env:
+            - name: AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS
+              $patch: delete
+            - name: AECONTROL_ARTIFACT_AWS_KMS_KEY_ARN
+              value: arn:aws:kms:us-east-2:123456789012:key/12345678-1234-1234-1234-1234567890ab
+            - name: AECONTROL_ARTIFACT_AWS_KMS_TIMEOUT_SECONDS
+              value: "5"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-worker
+spec:
+  template:
+    spec:
+      serviceAccountName: aecontrol-kms-signer
+      containers:
+        - name: worker
+          env:
+            - name: AECONTROL_ARTIFACT_ED25519_PRIVATE_KEYS
+              $patch: delete
+            - name: AECONTROL_ARTIFACT_AWS_KMS_KEY_ARN
+              value: arn:aws:kms:us-east-2:123456789012:key/12345678-1234-1234-1234-1234567890ab
+            - name: AECONTROL_ARTIFACT_AWS_KMS_TIMEOUT_SECONDS
+              value: "5"

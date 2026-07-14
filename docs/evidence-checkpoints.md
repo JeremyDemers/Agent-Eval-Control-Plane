@@ -108,10 +108,11 @@ and object key.
 
 The feature does not create or configure buckets, IAM roles, lifecycle rules, provider-native
 replication, or legal holds. Application-level dual publication proves two independently verified
-copies, but operators must still alert on failures, protect the Ed25519 private key, independently
-retain public keys, and choose a retention period consistent with policy. Direct cloud KMS/HSM
-signing remains a separate hardening stage. Vault Transit remote Ed25519 signing is available through
-[`vault-transit-signing.md`](vault-transit-signing.md).
+copies, but operators must still alert on failures, protect signing authority, independently retain
+public keys, and choose a retention period consistent with policy. Private keys can remain outside
+the process through Vault Transit or AWS KMS; see
+[`vault-transit-signing.md`](vault-transit-signing.md) and
+[`aws-kms-signing.md`](aws-kms-signing.md).
 
 The `checkpoint-replication` Kubernetes overlay runs a daily publisher at 03:30 UTC with
 `concurrencyPolicy: Forbid`, bounded retries and runtime, two-copy enforcement, and a hardened
@@ -131,3 +132,7 @@ Transit should patch the CronJob with the same token-file and public-key setting
 `vault-transit` overlay while deleting local private-key injection. The command requires exactly one
 of `--output` or `--s3` and exits nonzero on signing, configuration, retention, replication-policy,
 or read-back failure.
+
+AWS KMS environments should instead apply the KMS key ARN and public-key settings from the `aws-kms`
+overlay to the CronJob ServiceAccount and remove private-key injection. Keep `kms:Sign` scoped to the
+exact key ARN and the checkpoint S3 permissions scoped independently to each destination prefix.

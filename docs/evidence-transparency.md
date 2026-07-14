@@ -64,5 +64,6 @@ last entry as the head.
 Schema v16 implements Ed25519-signed checkpoints with create-only local export and S3 Object Lock
 compliance retention. The ordinary audit compares every checkpoint sequence and head to the live
 chain, detecting rollback and tail truncation. See
-[`evidence-checkpoints.md`](evidence-checkpoints.md). Remote KMS signing and cross-region checkpoint
-replication remain future hardening stages.
+[`evidence-checkpoints.md`](evidence-checkpoints.md). AWS KMS can keep checkpoint signing keys outside
+the workload through [`aws-kms-signing.md`](aws-kms-signing.md); independently administered
+cross-region checkpoint replication is also available.
