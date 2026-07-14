@@ -304,12 +304,27 @@ class ArtifactIntegrityItem(BaseModel):
     signing_key_id: str | None = None
 
 
+class ArtifactLedgerFailure(BaseModel):
+    sequence: int = Field(ge=1)
+    artifact_type: Literal["run", "comparison", "guardrail_evidence"]
+    artifact_id: UUID
+    reason: Literal[
+        "sequence_gap", "previous_hash", "entry_hash", "missing_artifact", "artifact_mismatch"
+    ]
+    expected_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    actual_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
 class ArtifactIntegrityReport(BaseModel):
     checked: int = Field(ge=0)
     valid: int = Field(ge=0)
     signed: int = Field(default=0, ge=0)
     unsigned: int = Field(default=0, ge=0)
     signature_algorithms: dict[str, int] = Field(default_factory=dict)
+    ledger_checked: int = Field(default=0, ge=0)
+    ledger_valid: int = Field(default=0, ge=0)
+    ledger_head_sha256: str = Field(default="0" * 64, pattern=r"^[a-f0-9]{64}$")
+    ledger_failures: list[ArtifactLedgerFailure] = Field(default_factory=list)
     failures: list[ArtifactIntegrityItem]
 
 

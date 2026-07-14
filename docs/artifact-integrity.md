@@ -50,6 +50,10 @@ The audit reports checked, valid, signed, unsigned, and per-algorithm counts. Fa
 mismatch, signature mismatch, or unavailable verification keys and include artifact type, UUID,
 algorithm, key ID, and digests, but never artifact payloads or private material.
 
+The same command verifies the schema v14 append-only evidence chain and exits nonzero for artifact or
+ledger failures. See [`evidence-transparency.md`](evidence-transparency.md) for ledger guarantees and
+external checkpoint requirements.
+
 ## Rotation and HMAC Compatibility
 
 1. Retain every public key referenced by stored Ed25519 evidence.

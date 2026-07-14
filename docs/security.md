@@ -65,6 +65,18 @@ tenant-specific worker environments remain trusted operator assets. The browser 
 operational endpoints expose only the deployment's configured default tenant, not a global tenant
 inventory. See [`multi-tenancy.md`](multi-tenancy.md) for migration and deployment details.
 
+## Evidence Boundary
+
+Ed25519 signatures let independent auditors verify artifacts without private signing authority.
+Schema v14 additionally chains each tenant's evidence in an append-only ledger and rejects ledger
+updates or deletes with a PostgreSQL trigger. Integrity audits compare every ledger envelope to its
+source row, so source deletion remains observable.
+
+The application database owner can alter schema objects and remains trusted. An administrator who
+disables the trigger can truncate the chain tail unless the head digest has been checkpointed outside
+PostgreSQL. See [`artifact-integrity.md`](artifact-integrity.md) and
+[`evidence-transparency.md`](evidence-transparency.md) for key and checkpoint boundaries.
+
 ## Repository Security
 
 `.github/workflows/security.yml` runs three independent controls:
@@ -74,7 +86,7 @@ inventory. See [`multi-tenancy.md`](multi-tenancy.md) for migration and deployme
 - `pip-audit` against runtime dependencies exported from the frozen `uv.lock` on every event.
 
 Actions are pinned to explicit release tags. The dependency audit excludes the editable project and
-development-only tools so its result describes the shipped runtime environment. The v0.39.0
+development-only tools so its result describes the shipped runtime environment. The v0.40.0
 release-candidate audit reported no known runtime dependency vulnerabilities.
 
 At startup, the API indexes regular suite and policy files under `AECONTROL_INPUT_ROOT`, which defaults

@@ -301,11 +301,20 @@ def store_verify(
                 f"{algorithm}={count}" for algorithm, count in report.signature_algorithms.items()
             )
             console.print(f"signature algorithms: {algorithms}")
+        console.print(
+            f"artifact ledger: {report.ledger_valid}/{report.ledger_checked} valid "
+            f"head={report.ledger_head_sha256}"
+        )
+        for ledger_failure in report.ledger_failures:
+            console.print(
+                f"- ledger sequence {ledger_failure.sequence}: {ledger_failure.reason} "
+                f"({ledger_failure.artifact_type} {ledger_failure.artifact_id})"
+            )
         for failure in report.failures:
             console.print(
                 f"- {failure.artifact_type} {failure.artifact_id}: {failure.failure_kind} failure"
             )
-    if report.failures:
+    if report.failures or report.ledger_failures:
         raise typer.Exit(1)
 
 

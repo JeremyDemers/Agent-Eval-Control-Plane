@@ -17,6 +17,7 @@ from aecontrol.integrity import (
     ArtifactKeyring,
     artifact_digest,
     generate_ed25519_keypair,
+    ledger_entry_digest,
     verify_digest,
 )
 
@@ -35,6 +36,28 @@ def test_artifact_digest_is_canonical_and_verifiable() -> None:
         verify_digest("0" * 64, first)
     with pytest.raises(ValueError):
         artifact_digest({"invalid": float("nan")})
+
+
+def test_ledger_digest_binds_tenant_sequence_envelope_and_previous_hash() -> None:
+    artifact_id = uuid4()
+    arguments = (
+        "tenant-a",
+        1,
+        "run",
+        artifact_id,
+        "a" * 64,
+        ED25519,
+        "attestor",
+        "signature",
+        "0" * 64,
+    )
+
+    digest = ledger_entry_digest(*arguments)
+
+    assert len(digest) == 64
+    assert digest == ledger_entry_digest(*arguments)
+    assert digest != ledger_entry_digest("tenant-b", *arguments[1:])
+    assert digest != ledger_entry_digest(*arguments[:-1], "f" * 64)
 
 
 def test_keyring_signatures_bind_artifact_identity_type_and_digest() -> None:

@@ -31,15 +31,18 @@ from aecontrol.guardrails import (
 )
 from aecontrol.integrity import (
     HMAC_SHA256,
+    LEDGER_GENESIS_SHA256,
     ArtifactAuthenticityError,
     ArtifactIntegrityError,
     ArtifactKeyring,
     artifact_digest,
+    ledger_entry_digest,
 )
 from aecontrol.models import (
     Accelerator,
     ArtifactIntegrityItem,
     ArtifactIntegrityReport,
+    ArtifactLedgerFailure,
     EvaluationJob,
     EvaluationRun,
     GpuCapacityForecast,
@@ -59,7 +62,7 @@ from aecontrol.models import (
 from aecontrol.placement import DEFAULT_WORKER_ACTIVE_SECONDS, diagnose_placement
 from aecontrol.tenancy import current_tenant_id
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 SIGNED_ARTIFACT_TABLES = ("evaluation_runs", "comparisons", "guardrail_evidence")
 TENANT_TABLES = (
     "evaluation_runs",
@@ -69,6 +72,7 @@ TENANT_TABLES = (
     "guardrail_config_activations",
     "evaluation_jobs",
     "workers",
+    "artifact_ledger",
 )
 
 
@@ -302,6 +306,29 @@ class ArtifactStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS artifact_ledger (
+                    tenant_id TEXT,
+                    sequence BIGINT NOT NULL CHECK (sequence >= 1),
+                    artifact_type TEXT NOT NULL CHECK (
+                        artifact_type IN ('run', 'comparison', 'guardrail_evidence')
+                    ),
+                    artifact_id UUID NOT NULL,
+                    payload_sha256 TEXT NOT NULL CHECK (payload_sha256 ~ '^[a-f0-9]{64}$'),
+                    signature_algorithm TEXT,
+                    signing_key_id TEXT,
+                    signature_value TEXT,
+                    previous_entry_sha256 TEXT NOT NULL CHECK (
+                        previous_entry_sha256 ~ '^[a-f0-9]{64}$'
+                    ),
+                    entry_sha256 TEXT NOT NULL CHECK (entry_sha256 ~ '^[a-f0-9]{64}$'),
+                    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (tenant_id, sequence),
+                    UNIQUE (tenant_id, artifact_type, artifact_id)
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS guardrail_config_versions (
                     config_id TEXT NOT NULL,
                     version TEXT NOT NULL,
@@ -410,9 +437,14 @@ class ArtifactStore:
                 )
                 """
             )
+            self._suspend_tenant_isolation(connection)
             self._backfill_artifact_digests(connection)
             self._migrate_signature_envelopes(connection)
             self._enable_tenant_isolation(connection)
+            self._suspend_tenant_isolation(connection)
+            self._backfill_artifact_ledger(connection)
+            self._enable_tenant_isolation(connection)
+            self._install_ledger_immutability_trigger(connection)
             connection.execute(
                 "ALTER TABLE evaluation_runs ALTER COLUMN payload_sha256 SET NOT NULL"
             )
@@ -424,7 +456,7 @@ class ArtifactStore:
                 )
                 return
             stored_version = cast(int, row["version"])
-            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
+            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif stored_version != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {stored_version}"
@@ -480,6 +512,15 @@ class ArtifactStore:
                     signature_key_id,
                     signature,
                 ),
+            )
+            self._append_artifact_ledger(
+                connection,
+                "run",
+                run.run_id,
+                digest,
+                signature_algorithm,
+                signature_key_id,
+                signature,
             )
 
     def get_run(self, run_id: UUID) -> EvaluationRun:
@@ -550,6 +591,15 @@ class ArtifactStore:
                     signature_key_id,
                     signature,
                 ),
+            )
+            self._append_artifact_ledger(
+                connection,
+                "comparison",
+                artifact.comparison_id,
+                digest,
+                signature_algorithm,
+                signature_key_id,
+                signature,
             )
         return artifact
 
@@ -765,6 +815,15 @@ class ArtifactStore:
                     signature,
                 ),
             )
+            self._append_artifact_ledger(
+                connection,
+                "guardrail_evidence",
+                artifact.evidence_id,
+                digest,
+                signature_algorithm,
+                signature_key_id,
+                signature,
+            )
         return artifact
 
     def get_guardrail_evidence(self, evidence_id: UUID) -> StoredGuardrailEvidence:
@@ -932,14 +991,139 @@ class ArtifactStore:
                                 signing_key_id=error.signing_key_id,
                             )
                         )
+            ledger_checked, ledger_valid, ledger_head, ledger_failures = (
+                self._verify_artifact_ledger(connection)
+            )
         return ArtifactIntegrityReport(
             checked=checked,
             valid=checked - len(failures),
             signed=signed,
             unsigned=unsigned,
             signature_algorithms=dict(sorted(signature_algorithms.items())),
+            ledger_checked=ledger_checked,
+            ledger_valid=ledger_valid,
+            ledger_head_sha256=ledger_head,
+            ledger_failures=ledger_failures,
             failures=failures,
         )
+
+    @staticmethod
+    def _verify_artifact_ledger(
+        connection: psycopg.Connection[dict[str, object]],
+    ) -> tuple[int, int, str, list[ArtifactLedgerFailure]]:
+        rows = connection.execute(
+            """SELECT sequence, artifact_type, artifact_id, payload_sha256,
+                      signature_algorithm, signing_key_id, signature_value,
+                      previous_entry_sha256, entry_sha256
+               FROM artifact_ledger ORDER BY sequence"""
+        ).fetchall()
+        failures: list[ArtifactLedgerFailure] = []
+        previous = LEDGER_GENESIS_SHA256
+        expected_sequence = 1
+        source_tables = {
+            "run": ("evaluation_runs", "run_id"),
+            "comparison": ("comparisons", "comparison_id"),
+            "guardrail_evidence": ("guardrail_evidence", "evidence_id"),
+        }
+        source_envelopes: dict[tuple[str, UUID], tuple[str | None, ...]] = {}
+        for artifact_type, (table, id_column) in source_tables.items():
+            source_rows = connection.execute(
+                sql.SQL(
+                    "SELECT {}, payload_sha256, signature_algorithm, signature_key_id, "
+                    "signature_value FROM {}"
+                ).format(sql.Identifier(id_column), sql.Identifier(table))
+            ).fetchall()
+            for source in source_rows:
+                source_envelopes[(artifact_type, cast(UUID, source[id_column]))] = tuple(
+                    str(source[key]) if source[key] is not None else None
+                    for key in (
+                        "payload_sha256",
+                        "signature_algorithm",
+                        "signature_key_id",
+                        "signature_value",
+                    )
+                )
+        tenant_id = current_tenant_id()
+        for row in rows:
+            sequence = cast(int, row["sequence"])
+            artifact_type = cast(
+                Literal["run", "comparison", "guardrail_evidence"],
+                str(row["artifact_type"]),
+            )
+            artifact_id = cast(UUID, row["artifact_id"])
+            payload_sha256 = str(row["payload_sha256"])
+            signature_algorithm = (
+                str(row["signature_algorithm"]) if row["signature_algorithm"] is not None else None
+            )
+            signing_key_id = (
+                str(row["signing_key_id"]) if row["signing_key_id"] is not None else None
+            )
+            signature = str(row["signature_value"]) if row["signature_value"] is not None else None
+            stored_previous = str(row["previous_entry_sha256"])
+            stored_entry = str(row["entry_sha256"])
+            expected_entry = ledger_entry_digest(
+                tenant_id,
+                sequence,
+                artifact_type,
+                artifact_id,
+                payload_sha256,
+                signature_algorithm,
+                signing_key_id,
+                signature,
+                stored_previous,
+            )
+            failure: ArtifactLedgerFailure | None = None
+            if sequence != expected_sequence:
+                failure = ArtifactLedgerFailure(
+                    sequence=sequence,
+                    artifact_type=artifact_type,
+                    artifact_id=artifact_id,
+                    reason="sequence_gap",
+                )
+            elif not hmac.compare_digest(stored_previous, previous):
+                failure = ArtifactLedgerFailure(
+                    sequence=sequence,
+                    artifact_type=artifact_type,
+                    artifact_id=artifact_id,
+                    reason="previous_hash",
+                    expected_sha256=previous,
+                    actual_sha256=stored_previous,
+                )
+            elif not hmac.compare_digest(stored_entry, expected_entry):
+                failure = ArtifactLedgerFailure(
+                    sequence=sequence,
+                    artifact_type=artifact_type,
+                    artifact_id=artifact_id,
+                    reason="entry_hash",
+                    expected_sha256=expected_entry,
+                    actual_sha256=stored_entry,
+                )
+            else:
+                source_envelope = source_envelopes.get((artifact_type, artifact_id))
+                if source_envelope is None:
+                    failure = ArtifactLedgerFailure(
+                        sequence=sequence,
+                        artifact_type=artifact_type,
+                        artifact_id=artifact_id,
+                        reason="missing_artifact",
+                    )
+                elif source_envelope != (
+                    payload_sha256,
+                    signature_algorithm,
+                    signing_key_id,
+                    signature,
+                ):
+                    failure = ArtifactLedgerFailure(
+                        sequence=sequence,
+                        artifact_type=artifact_type,
+                        artifact_id=artifact_id,
+                        reason="artifact_mismatch",
+                    )
+            if failure is not None:
+                failures.append(failure)
+            previous = stored_entry
+            expected_sequence = sequence + 1
+        return len(rows), len(rows) - len(failures), previous, failures
 
     def list_comparisons(self, limit: int = 100) -> list[StoredComparisonSummary]:
         self.initialize()
@@ -1568,6 +1752,172 @@ class ArtifactStore:
                 ).format(sql.Identifier(table)),
                 (HMAC_SHA256,),
             )
+
+    @staticmethod
+    def _suspend_tenant_isolation(
+        connection: psycopg.Connection[dict[str, object]],
+    ) -> None:
+        for table in TENANT_TABLES:
+            connection.execute(
+                sql.SQL("ALTER TABLE {} NO FORCE ROW LEVEL SECURITY").format(sql.Identifier(table))
+            )
+
+    @staticmethod
+    def _install_ledger_immutability_trigger(
+        connection: psycopg.Connection[dict[str, object]],
+    ) -> None:
+        connection.execute(
+            """
+            CREATE OR REPLACE FUNCTION reject_artifact_ledger_mutation()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RAISE EXCEPTION 'artifact ledger is append-only';
+            END;
+            $$
+            """
+        )
+        connection.execute("DROP TRIGGER IF EXISTS artifact_ledger_append_only ON artifact_ledger")
+        connection.execute(
+            """CREATE TRIGGER artifact_ledger_append_only
+               BEFORE UPDATE OR DELETE ON artifact_ledger
+               FOR EACH ROW EXECUTE FUNCTION reject_artifact_ledger_mutation()"""
+        )
+
+    def _backfill_artifact_ledger(self, connection: psycopg.Connection[dict[str, object]]) -> None:
+        rows = connection.execute(
+            """
+            SELECT tenant_id, artifact_type, artifact_id, payload_sha256,
+                   signature_algorithm, signing_key_id, signature_value
+            FROM (
+                SELECT tenant_id, 'run' AS artifact_type, run_id AS artifact_id,
+                       payload_sha256, signature_algorithm,
+                       signature_key_id AS signing_key_id, signature_value,
+                       completed_at AS event_at
+                FROM evaluation_runs
+                UNION ALL
+                SELECT tenant_id, 'comparison', comparison_id, payload_sha256,
+                       signature_algorithm, signature_key_id AS signing_key_id,
+                       signature_value, created_at
+                FROM comparisons
+                UNION ALL
+                SELECT tenant_id, 'guardrail_evidence', evidence_id, payload_sha256,
+                       signature_algorithm, signature_key_id AS signing_key_id,
+                       signature_value, created_at
+                FROM guardrail_evidence
+            ) AS artifacts
+            ORDER BY tenant_id, event_at, artifact_type, artifact_id
+            """
+        ).fetchall()
+        for row in rows:
+            self._append_ledger_values(
+                connection,
+                str(row["tenant_id"]),
+                str(row["artifact_type"]),
+                cast(UUID, row["artifact_id"]),
+                str(row["payload_sha256"]),
+                str(row["signature_algorithm"]) if row["signature_algorithm"] is not None else None,
+                str(row["signing_key_id"]) if row["signing_key_id"] is not None else None,
+                str(row["signature_value"]) if row["signature_value"] is not None else None,
+                require_match=False,
+            )
+
+    def _append_artifact_ledger(
+        self,
+        connection: psycopg.Connection[dict[str, object]],
+        artifact_type: str,
+        artifact_id: UUID,
+        payload_sha256: str,
+        signature_algorithm: str | None,
+        signing_key_id: str | None,
+        signature: str | None,
+    ) -> None:
+        tenant_id = current_tenant_id()
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"{self.schema}:{tenant_id}:artifact-ledger",),
+        )
+        self._append_ledger_values(
+            connection,
+            tenant_id,
+            artifact_type,
+            artifact_id,
+            payload_sha256,
+            signature_algorithm,
+            signing_key_id,
+            signature,
+        )
+
+    @staticmethod
+    def _append_ledger_values(
+        connection: psycopg.Connection[dict[str, object]],
+        tenant_id: str,
+        artifact_type: str,
+        artifact_id: UUID,
+        payload_sha256: str,
+        signature_algorithm: str | None,
+        signing_key_id: str | None,
+        signature: str | None,
+        *,
+        require_match: bool = True,
+    ) -> None:
+        existing = connection.execute(
+            """SELECT payload_sha256, signature_algorithm, signing_key_id, signature_value
+               FROM artifact_ledger
+               WHERE tenant_id = %s AND artifact_type = %s AND artifact_id = %s""",
+            (tenant_id, artifact_type, artifact_id),
+        ).fetchone()
+        envelope = (payload_sha256, signature_algorithm, signing_key_id, signature)
+        if existing is not None:
+            persisted = (
+                str(existing["payload_sha256"]),
+                str(existing["signature_algorithm"])
+                if existing["signature_algorithm"] is not None
+                else None,
+                str(existing["signing_key_id"]) if existing["signing_key_id"] is not None else None,
+                str(existing["signature_value"])
+                if existing["signature_value"] is not None
+                else None,
+            )
+            if require_match and persisted != envelope:
+                raise RuntimeError(f"artifact ledger conflict for {artifact_type} {artifact_id}")
+            return
+        latest = connection.execute(
+            """SELECT sequence, entry_sha256 FROM artifact_ledger
+               WHERE tenant_id = %s ORDER BY sequence DESC LIMIT 1""",
+            (tenant_id,),
+        ).fetchone()
+        sequence = cast(int, latest["sequence"]) + 1 if latest is not None else 1
+        previous = str(latest["entry_sha256"]) if latest is not None else LEDGER_GENESIS_SHA256
+        entry_sha256 = ledger_entry_digest(
+            tenant_id,
+            sequence,
+            artifact_type,
+            artifact_id,
+            payload_sha256,
+            signature_algorithm,
+            signing_key_id,
+            signature,
+            previous,
+        )
+        connection.execute(
+            """INSERT INTO artifact_ledger (
+                   tenant_id, sequence, artifact_type, artifact_id, payload_sha256,
+                   signature_algorithm, signing_key_id, signature_value,
+                   previous_entry_sha256, entry_sha256
+               ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                tenant_id,
+                sequence,
+                artifact_type,
+                artifact_id,
+                payload_sha256,
+                signature_algorithm,
+                signing_key_id,
+                signature,
+                previous,
+                entry_sha256,
+            ),
+        )
 
     def _enable_tenant_isolation(self, connection: psycopg.Connection[dict[str, object]]) -> None:
         for table in TENANT_TABLES:
