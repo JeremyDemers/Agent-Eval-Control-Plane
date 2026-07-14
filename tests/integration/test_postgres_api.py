@@ -38,7 +38,7 @@ def api_client(database_url: str) -> TestClient:
         connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
-@pytest.mark.parametrize("stored_version", [1, 10])
+@pytest.mark.parametrize("stored_version", [1, 10, 14])
 def test_supported_schema_is_migrated_in_place(database_url: str, stored_version: int) -> None:
     schema = f"test_{uuid4().hex}"
     try:
@@ -57,7 +57,7 @@ def test_supported_schema_is_migrated_in_place(database_url: str, stored_version
             )
 
         store = ArtifactStore(database_url, schema=schema)
-        assert store.health()["schema_version"] == 14
+        assert store.health()["schema_version"] == 15
     finally:
         with psycopg.connect(database_url, autocommit=True) as connection:
             connection.execute(
@@ -227,6 +227,125 @@ def test_local_trust_uses_deployment_tenant(
             )
 
 
+def test_self_service_tenant_lifecycle_and_key_rotation(database_url: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    schema = f"test_{uuid4().hex}"
+    auth_config = tmp_path / "operator-auth.yaml"
+    auth_config.write_text(
+        "keys:\n"
+        f"  - key_id: platform-operator\n    tenant_id: control-plane\n"
+        f"    secret_sha256: {hash_api_key('operator-secret')}\n    scopes: [operator]\n"
+        f"  - key_id: static-research-auditor\n    tenant_id: research\n"
+        f"    secret_sha256: {hash_api_key('static-research-secret')}\n    scopes: [read]\n"
+    )
+    operator = {"Authorization": "Bearer operator-secret"}
+    static_auditor = {"Authorization": "Bearer static-research-secret"}
+    try:
+        with TestClient(create_app(database_url, schema=schema, auth_config=auth_config)) as client:
+            assert client.get("/api/v1/runs", headers=static_auditor).status_code == 200
+            created = client.post(
+                "/api/v1/platform/tenants",
+                headers=operator,
+                json={
+                    "tenant_id": "research",
+                    "display_name": "NVIDIA Agent Research",
+                    "initial_key_id": "research-admin-v1",
+                },
+            )
+            assert created.status_code == 201
+            assert created.headers["cache-control"] == "no-store"
+            issued = created.json()
+            assert issued["tenant"]["status"] == "active"
+            assert issued["key"]["scopes"] == ["admin"]
+            assert "secret_sha256" not in issued["key"]
+            initial_secret = issued["secret"]
+            assert len(initial_secret) >= 32
+            initial_admin = {"Authorization": f"Bearer {initial_secret}"}
+
+            duplicate = client.post(
+                "/api/v1/platform/tenants",
+                headers=operator,
+                json={"tenant_id": "research", "display_name": "Duplicate"},
+            )
+            assert duplicate.status_code == 409
+
+            tenants = client.get("/api/v1/platform/tenants", headers=operator)
+            assert [tenant["tenant_id"] for tenant in tenants.json()] == ["research"]
+            assert client.get("/api/v1/platform/tenants", headers=initial_admin).status_code == 403
+
+            current = client.get("/api/v1/tenant", headers=initial_admin)
+            assert current.status_code == 200
+            assert current.headers["x-aecontrol-tenant"] == "research"
+            assert current.json()["display_name"] == "NVIDIA Agent Research"
+            assert client.get("/api/v1/runs", headers=static_auditor).status_code == 200
+
+            observer = client.post(
+                "/api/v1/tenant/api-keys",
+                headers=initial_admin,
+                json={"key_id": "auditor", "scopes": ["read"]},
+            )
+            assert observer.status_code == 201
+            assert observer.headers["cache-control"] == "no-store"
+            observer_secret = observer.json()["secret"]
+            observer_headers = {"Authorization": f"Bearer {observer_secret}"}
+            assert client.get("/api/v1/runs", headers=observer_headers).status_code == 200
+            assert (
+                client.get("/api/v1/tenant/api-keys", headers=observer_headers).status_code == 403
+            )
+
+            final_admin = client.delete(
+                "/api/v1/tenant/api-keys/research-admin-v1", headers=initial_admin
+            )
+            assert final_admin.status_code == 409
+            assert "last active admin" in final_admin.json()["detail"]
+
+            replacement = client.post(
+                "/api/v1/tenant/api-keys",
+                headers=initial_admin,
+                json={"key_id": "research-admin-v2", "scopes": ["admin"]},
+            )
+            replacement_secret = replacement.json()["secret"]
+            replacement_admin = {"Authorization": f"Bearer {replacement_secret}"}
+            revoked = client.delete(
+                "/api/v1/tenant/api-keys/research-admin-v1", headers=initial_admin
+            )
+            assert revoked.status_code == 200
+            assert revoked.json()["revoked_by"] == "research-admin-v1"
+            assert client.get("/api/v1/tenant", headers=initial_admin).status_code == 401
+            assert client.get("/api/v1/tenant", headers=replacement_admin).status_code == 200
+
+            suspended = client.patch(
+                "/api/v1/platform/tenants/research",
+                headers=operator,
+                json={"status": "suspended"},
+            )
+            assert suspended.status_code == 200
+            assert suspended.json()["status"] == "suspended"
+            assert client.get("/api/v1/tenant", headers=replacement_admin).status_code == 401
+            assert client.get("/api/v1/runs", headers=observer_headers).status_code == 401
+            assert client.get("/api/v1/runs", headers=static_auditor).status_code == 401
+
+            reactivated = client.patch(
+                "/api/v1/platform/tenants/research",
+                headers=operator,
+                json={"status": "active"},
+            )
+            assert reactivated.status_code == 200
+            assert client.get("/api/v1/runs", headers=static_auditor).status_code == 200
+            keys = client.get("/api/v1/tenant/api-keys", headers=replacement_admin)
+            assert keys.status_code == 200
+            assert [key["key_id"] for key in keys.json()] == [
+                "research-admin-v1",
+                "auditor",
+                "research-admin-v2",
+            ]
+            assert keys.json()[0]["revoked_at"] is not None
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
 def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
     schema = f"test_{uuid4().hex}"
     role = f"tenant_test_{uuid4().hex}"
@@ -327,7 +446,7 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
             )
 
         migrated = ArtifactStore(tenant_database_url, schema=schema)
-        assert migrated.health()["schema_version"] == 14
+        assert migrated.health()["schema_version"] == 15
 
         with psycopg.connect(database_url) as connection:
             ledger_tenants = connection.execute(
@@ -377,7 +496,7 @@ def test_api_keys_enforce_postgres_tenant_isolation(database_url: str, tmp_path)
 def test_persisted_evaluation_comparison_and_trace_flow(api_client: TestClient) -> None:
     health = api_client.get("/healthz", headers={"X-Request-ID": "integration-request"})
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 14
+    assert health.json()["schema_version"] == 15
     assert health.headers["x-request-id"] == "integration-request"
     assert health.headers["traceparent"].startswith("00-")
     assert health.headers["server-timing"].startswith("app;dur=")

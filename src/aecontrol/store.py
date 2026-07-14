@@ -61,8 +61,18 @@ from aecontrol.models import (
 )
 from aecontrol.placement import DEFAULT_WORKER_ACTIVE_SECONDS, diagnose_placement
 from aecontrol.tenancy import current_tenant_id
+from aecontrol.tenants import (
+    LastTenantAdminError,
+    ResolvedTenantAPIKey,
+    TenantAPIKeyRecord,
+    TenantConflictError,
+    TenantRecord,
+    TenantScope,
+    TenantStatus,
+    TenantSuspendedError,
+)
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 SIGNED_ARTIFACT_TABLES = ("evaluation_runs", "comparisons", "guardrail_evidence")
 TENANT_TABLES = (
     "evaluation_runs",
@@ -329,6 +339,53 @@ class ArtifactStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS control_plane_tenants (
+                    tenant_id TEXT PRIMARY KEY CHECK (
+                        tenant_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+                    ),
+                    display_name TEXT NOT NULL CHECK (
+                        char_length(display_name) BETWEEN 1 AND 200
+                    ),
+                    status TEXT NOT NULL CHECK (status IN ('active', 'suspended')),
+                    created_at TIMESTAMPTZ NOT NULL,
+                    created_by TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    updated_by TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tenant_api_keys (
+                    tenant_id TEXT NOT NULL REFERENCES control_plane_tenants(tenant_id),
+                    key_id TEXT NOT NULL CHECK (
+                        key_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+                    ),
+                    secret_sha256 TEXT NOT NULL UNIQUE CHECK (
+                        secret_sha256 ~ '^[a-f0-9]{64}$'
+                    ),
+                    scopes TEXT[] NOT NULL CHECK (
+                        cardinality(scopes) > 0
+                        AND scopes <@ ARRAY['read', 'write', 'admin']::TEXT[]
+                    ),
+                    created_at TIMESTAMPTZ NOT NULL,
+                    created_by TEXT NOT NULL,
+                    revoked_at TIMESTAMPTZ,
+                    revoked_by TEXT,
+                    PRIMARY KEY (tenant_id, key_id),
+                    CHECK (
+                        (revoked_at IS NULL AND revoked_by IS NULL)
+                        OR (revoked_at IS NOT NULL AND revoked_by IS NOT NULL)
+                    )
+                )
+                """
+            )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_tenant_api_keys_active_digest
+                   ON tenant_api_keys(secret_sha256) WHERE revoked_at IS NULL"""
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS guardrail_config_versions (
                     config_id TEXT NOT NULL,
                     version TEXT NOT NULL,
@@ -456,11 +513,229 @@ class ArtifactStore:
                 )
                 return
             stored_version = cast(int, row["version"])
-            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}:
+            if stored_version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}:
                 connection.execute("UPDATE schema_metadata SET version = %s", (SCHEMA_VERSION,))
             elif stored_version != SCHEMA_VERSION:
                 msg = f"unsupported database schema version: {stored_version}"
                 raise RuntimeError(msg)
+
+    def create_tenant(
+        self,
+        tenant_id: str,
+        display_name: str,
+        key_id: str,
+        secret_sha256: str,
+        *,
+        created_by: str,
+    ) -> tuple[TenantRecord, TenantAPIKeyRecord]:
+        self.initialize()
+        now = datetime.now(UTC)
+        try:
+            with self._connect() as connection:
+                tenant_row = connection.execute(
+                    """
+                    INSERT INTO control_plane_tenants (
+                        tenant_id, display_name, status, created_at, created_by,
+                        updated_at, updated_by
+                    ) VALUES (%s, %s, 'active', %s, %s, %s, %s)
+                    RETURNING tenant_id, display_name, status, created_at, created_by,
+                              updated_at, updated_by
+                    """,
+                    (tenant_id, display_name, now, created_by, now, created_by),
+                ).fetchone()
+                key_row = connection.execute(
+                    """
+                    INSERT INTO tenant_api_keys (
+                        tenant_id, key_id, secret_sha256, scopes, created_at, created_by
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING tenant_id, key_id, scopes, created_at, created_by,
+                              revoked_at, revoked_by
+                    """,
+                    (tenant_id, key_id, secret_sha256, ["admin"], now, created_by),
+                ).fetchone()
+        except UniqueViolation as error:
+            raise TenantConflictError(f"tenant or API key already exists: {tenant_id}") from error
+        if tenant_row is None or key_row is None:
+            raise RuntimeError("PostgreSQL did not return the created tenant")
+        return TenantRecord.model_validate(tenant_row), TenantAPIKeyRecord.model_validate(key_row)
+
+    def list_tenants(self) -> list[TenantRecord]:
+        self.initialize()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT tenant_id, display_name, status, created_at, created_by,
+                       updated_at, updated_by
+                FROM control_plane_tenants ORDER BY tenant_id
+                """
+            ).fetchall()
+        return [TenantRecord.model_validate(row) for row in rows]
+
+    def get_tenant(self, tenant_id: str) -> TenantRecord:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT tenant_id, display_name, status, created_at, created_by,
+                       updated_at, updated_by
+                FROM control_plane_tenants WHERE tenant_id = %s
+                """,
+                (tenant_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(tenant_id)
+        return TenantRecord.model_validate(row)
+
+    def set_tenant_status(
+        self, tenant_id: str, status: TenantStatus, *, updated_by: str
+    ) -> TenantRecord:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                UPDATE control_plane_tenants
+                SET status = %s, updated_at = %s, updated_by = %s
+                WHERE tenant_id = %s
+                RETURNING tenant_id, display_name, status, created_at, created_by,
+                          updated_at, updated_by
+                """,
+                (status, datetime.now(UTC), updated_by, tenant_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(tenant_id)
+        return TenantRecord.model_validate(row)
+
+    def tenant_access_allowed(self, tenant_id: str) -> bool:
+        """Treat unregistered static-key tenants as active for backward compatibility."""
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT status FROM control_plane_tenants WHERE tenant_id = %s", (tenant_id,)
+            ).fetchone()
+        return row is None or row["status"] == "active"
+
+    def resolve_tenant_api_key(self, secret_sha256: str) -> ResolvedTenantAPIKey | None:
+        self.initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT key.tenant_id, key.key_id, key.scopes
+                FROM tenant_api_keys AS key
+                JOIN control_plane_tenants AS tenant USING (tenant_id)
+                WHERE key.secret_sha256 = %s
+                  AND key.revoked_at IS NULL
+                  AND tenant.status = 'active'
+                """,
+                (secret_sha256,),
+            ).fetchone()
+        return ResolvedTenantAPIKey.model_validate(row) if row is not None else None
+
+    def issue_tenant_api_key(
+        self,
+        tenant_id: str,
+        key_id: str,
+        secret_sha256: str,
+        scopes: set[TenantScope],
+        *,
+        created_by: str,
+    ) -> TenantAPIKeyRecord:
+        self.initialize()
+        try:
+            with self._connect() as connection:
+                tenant = connection.execute(
+                    "SELECT status FROM control_plane_tenants WHERE tenant_id = %s FOR UPDATE",
+                    (tenant_id,),
+                ).fetchone()
+                if tenant is None:
+                    raise KeyError(tenant_id)
+                if tenant["status"] != "active":
+                    raise TenantSuspendedError(f"tenant is suspended: {tenant_id}")
+                row = connection.execute(
+                    """
+                    INSERT INTO tenant_api_keys (
+                        tenant_id, key_id, secret_sha256, scopes, created_at, created_by
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING tenant_id, key_id, scopes, created_at, created_by,
+                              revoked_at, revoked_by
+                    """,
+                    (
+                        tenant_id,
+                        key_id,
+                        secret_sha256,
+                        sorted(scopes),
+                        datetime.now(UTC),
+                        created_by,
+                    ),
+                ).fetchone()
+        except UniqueViolation as error:
+            raise TenantConflictError(f"API key already exists: {key_id}") from error
+        if row is None:
+            raise RuntimeError("PostgreSQL did not return the created API key")
+        return TenantAPIKeyRecord.model_validate(row)
+
+    def list_tenant_api_keys(self, tenant_id: str) -> list[TenantAPIKeyRecord]:
+        self.initialize()
+        with self._connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM control_plane_tenants WHERE tenant_id = %s", (tenant_id,)
+            ).fetchone()
+            if exists is None:
+                raise KeyError(tenant_id)
+            rows = connection.execute(
+                """
+                SELECT tenant_id, key_id, scopes, created_at, created_by,
+                       revoked_at, revoked_by
+                FROM tenant_api_keys WHERE tenant_id = %s ORDER BY created_at, key_id
+                """,
+                (tenant_id,),
+            ).fetchall()
+        return [TenantAPIKeyRecord.model_validate(row) for row in rows]
+
+    def revoke_tenant_api_key(
+        self, tenant_id: str, key_id: str, *, revoked_by: str
+    ) -> TenantAPIKeyRecord:
+        self.initialize()
+        with self._connect() as connection:
+            tenant = connection.execute(
+                "SELECT status FROM control_plane_tenants WHERE tenant_id = %s FOR UPDATE",
+                (tenant_id,),
+            ).fetchone()
+            if tenant is None:
+                raise KeyError(tenant_id)
+            row = connection.execute(
+                """
+                SELECT tenant_id, key_id, scopes, created_at, created_by,
+                       revoked_at, revoked_by
+                FROM tenant_api_keys WHERE tenant_id = %s AND key_id = %s FOR UPDATE
+                """,
+                (tenant_id, key_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(key_id)
+            if row["revoked_at"] is not None:
+                return TenantAPIKeyRecord.model_validate(row)
+            if "admin" in cast(list[str], row["scopes"]):
+                administrators = connection.execute(
+                    """
+                    SELECT count(*) AS value FROM tenant_api_keys
+                    WHERE tenant_id = %s AND revoked_at IS NULL AND 'admin' = ANY(scopes)
+                    """,
+                    (tenant_id,),
+                ).fetchone()
+                if administrators is None or int(str(administrators["value"])) <= 1:
+                    raise LastTenantAdminError("cannot revoke the tenant's last active admin key")
+            updated = connection.execute(
+                """
+                UPDATE tenant_api_keys SET revoked_at = %s, revoked_by = %s
+                WHERE tenant_id = %s AND key_id = %s
+                RETURNING tenant_id, key_id, scopes, created_at, created_by,
+                          revoked_at, revoked_by
+                """,
+                (datetime.now(UTC), revoked_by, tenant_id, key_id),
+            ).fetchone()
+        if updated is None:
+            raise RuntimeError("PostgreSQL did not return the revoked API key")
+        return TenantAPIKeyRecord.model_validate(updated)
 
     def save_run(self, run: EvaluationRun) -> None:
         self.initialize()

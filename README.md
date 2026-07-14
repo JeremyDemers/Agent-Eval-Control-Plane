@@ -262,7 +262,7 @@ distributions and GitHub artifact-provenance attestations.
 
 ```bash
 make package
-gh attestation verify dist/aecontrol-0.40.0-py3-none-any.whl \
+gh attestation verify dist/aecontrol-0.41.0-py3-none-any.whl \
   --repo JeremyDemers/Agent-Eval-Control-Plane
 ```
 
@@ -412,8 +412,11 @@ See [`docs/nemo-guardrails.md`](docs/nemo-guardrails.md) for evidence semantics 
 ## Scoped API Authentication
 
 Production-style bearer authentication can be enabled without changing the zero-configuration local
-demo. API keys are stored as SHA-256 digests, compared in constant time, assigned `read`, `write`, or
-`admin` scopes, represented in OpenAPI, and attributed by key ID in structured request logs.
+demo. API keys are stored as SHA-256 digests, assigned `read`, `write`, or `admin` tenant scopes,
+represented in OpenAPI, and attributed by key ID in structured request logs. Schema v15 adds an
+isolated bootstrap `operator` scope, atomic tenant provisioning, one-time dynamic key issuance,
+tenant-admin rotation, revocation history, and fail-closed suspension without granting the platform
+operator access to tenant evidence.
 
 ```bash
 uv run aecontrol auth hash-key
@@ -421,7 +424,9 @@ uv run aecontrol auth validate auth.yaml
 AECONTROL_AUTH_CONFIG=auth.yaml make serve
 ```
 
-See [`docs/authentication.md`](docs/authentication.md) for configuration and rotation guidance.
+See [`docs/authentication.md`](docs/authentication.md) for configuration and rotation guidance. See
+[`docs/tenant-lifecycle.md`](docs/tenant-lifecycle.md) for the operator and self-service API,
+concurrency invariants, backward compatibility, and credential-registry trust boundary.
 
 ## Asymmetric Artifact Attestations
 
@@ -455,8 +460,8 @@ backend is not hardened isolation for untrusted code, while the stronger Podman 
 the host kernel. The project consumes but does not install or reconfigure NVIDIA GPU Operator,
 DCGM Exporter, CloudNativePG, Barman Cloud Plugin, cert-manager, or Prometheus Operator. Automated
 restore drills, cross-region promotion, additional hosted providers, retention-locked evidence
-exports, remote KMS signing, self-service tenant administration, and cross-tenant fleet analytics
-remain in `docs/roadmap.md`.
+exports, remote KMS signing, tenant quotas and federation, and cross-tenant fleet analytics remain in
+`docs/roadmap.md`.
 
 ## Project Governance
 

@@ -1,9 +1,11 @@
 # Tenant Isolation
 
-AgentEval binds every authenticated API key to exactly one tenant. The tenant is configuration owned
-by the control-plane operator, not a caller-supplied header, so a credential cannot request another
-organization's namespace. `admin` is tenant-local: it satisfies API scopes inside the key's tenant but
-does not grant cross-tenant inventory or impersonation.
+AgentEval binds every authenticated API key to exactly one tenant. Identity comes from an
+operator-owned static configuration or the schema v15 credential registry, never a caller-supplied
+header, so a credential cannot request another organization's namespace. `admin` is tenant-local: it
+satisfies API scopes inside the key's tenant but does not grant cross-tenant inventory or
+impersonation. The separate static `operator` scope manages lifecycle state but cannot read tenant
+evidence.
 
 ```yaml
 keys:
@@ -54,6 +56,10 @@ example establishes the same transaction-local default tenant inside each Postgr
 clone and patch both the worker deployment and scaler query when creating another tenant's pool.
 
 Unauthenticated health, readiness, metrics, and browser routes remain operational surfaces for the
-deployment's `AECONTROL_TENANT_ID`; they are not cross-tenant aggregate views. Self-service tenant
-provisioning, global fleet administration, quotas, billing, and cross-tenant analytics are outside the
-current boundary.
+deployment's `AECONTROL_TENANT_ID`; they are not cross-tenant aggregate views. Schema v15 provides
+atomic tenant provisioning, suspension, reactivation, self-service key rotation, and global lifecycle
+inventory. The lifecycle and credential tables deliberately sit outside tenant RLS because identity
+must be resolved before tenant context exists; only operator and tenant-admin API methods expose them.
+See [`tenant-lifecycle.md`](tenant-lifecycle.md) for that database trust boundary. Quotas, billing,
+OIDC federation, automatic worker provisioning, and cross-tenant analytics remain outside the current
+boundary.

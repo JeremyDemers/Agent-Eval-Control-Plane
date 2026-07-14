@@ -21,6 +21,7 @@ from aecontrol.langgraph import (
 )
 from aecontrol.nim import NIMClient
 from aecontrol.sdk import AgentEvalClient, AsyncAgentEvalClient
+from aecontrol.tenants import IssuedTenantAPIKey, TenantAPIKeyRecord, TenantRecord
 
 __all__ = [
     "AgentEvalClient",
@@ -33,11 +34,14 @@ __all__ = [
     "GuardrailEfficacyReport",
     "GuardrailEvidence",
     "GuardrailsClient",
+    "IssuedTenantAPIKey",
     "LangGraphCaptureOptions",
     "LangGraphOutputMapping",
     "LangGraphRuntimeAdapter",
     "NIMClient",
     "StoredGuardrailEvidence",
+    "TenantAPIKeyRecord",
+    "TenantRecord",
     "compare_runs",
     "evaluate_gate",
     "guardrail_bundle_digest",

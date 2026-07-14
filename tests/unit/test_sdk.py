@@ -26,6 +26,7 @@ from aecontrol.sdk import (
     AsyncAgentEvalClient,
     HttpTransport,
 )
+from aecontrol.tenants import IssuedTenantAPIKey, TenantAPIKeyRecord, TenantRecord
 
 
 class FakeTransport:
@@ -345,6 +346,53 @@ def test_client_manages_guardrail_configuration_lifecycle() -> None:
     }
 
 
+def test_client_manages_tenant_lifecycle() -> None:
+    transport = FakeTransport()
+    now = datetime.now(UTC)
+    tenant = TenantRecord(
+        tenant_id="research",
+        display_name="Agent Research",
+        status="active",
+        created_at=now,
+        created_by="operator",
+        updated_at=now,
+        updated_by="operator",
+    )
+    key = TenantAPIKeyRecord(
+        tenant_id=tenant.tenant_id,
+        key_id="admin-v1",
+        scopes={"admin"},
+        created_at=now,
+        created_by="operator",
+    )
+    issued = IssuedTenantAPIKey(tenant=tenant, key=key, secret="s" * 32)
+    tenant_payload = tenant.model_dump(mode="json")
+    key_payload = key.model_dump(mode="json")
+    issued_payload = issued.model_dump(mode="json")
+    transport.add("GET", "/api/v1/platform/tenants", [tenant_payload])
+    transport.add("POST", "/api/v1/platform/tenants", issued_payload)
+    transport.add("PATCH", "/api/v1/platform/tenants/research", tenant_payload)
+    transport.add("GET", "/api/v1/tenant", tenant_payload)
+    transport.add("GET", "/api/v1/tenant/api-keys", [key_payload])
+    transport.add("POST", "/api/v1/tenant/api-keys", issued_payload)
+    transport.add("DELETE", "/api/v1/tenant/api-keys/admin-v1", key_payload)
+    client = AgentEvalClient(transport=transport)
+
+    assert client.tenants() == [tenant]
+    assert client.create_tenant("research", "Agent Research", "admin-v1") == issued
+    assert client.set_tenant_status("research", "active") == tenant
+    assert client.tenant() == tenant
+    assert client.tenant_api_keys() == [key]
+    assert client.issue_tenant_api_key("admin-v1", {"admin"}) == issued
+    assert client.revoke_tenant_api_key("admin-v1") == key
+    assert transport.requests[1][2] == {
+        "tenant_id": "research",
+        "display_name": "Agent Research",
+        "initial_key_id": "admin-v1",
+    }
+    assert transport.requests[5][2] == {"key_id": "admin-v1", "scopes": ["admin"]}
+
+
 def test_wait_validation_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = FakeTransport()
     queued = job_payload(JobStatus.QUEUED)
@@ -388,6 +436,48 @@ async def test_async_client_health_and_collections() -> None:
     assert await client.list_comparisons() == []
     assert (await client.gpu_capacity()).active_cuda_workers == 2
     assert (await client.gpu_demand()).saturation == "within_capacity"
+
+
+@pytest.mark.asyncio
+async def test_async_client_wraps_tenant_lifecycle() -> None:
+    transport = FakeTransport()
+    now = datetime.now(UTC)
+    tenant = TenantRecord(
+        tenant_id="research",
+        display_name="Agent Research",
+        status="active",
+        created_at=now,
+        created_by="operator",
+        updated_at=now,
+        updated_by="operator",
+    )
+    key = TenantAPIKeyRecord(
+        tenant_id="research",
+        key_id="admin-v1",
+        scopes={"admin"},
+        created_at=now,
+        created_by="operator",
+    )
+    issued = IssuedTenantAPIKey(tenant=tenant, key=key, secret="s" * 32)
+    tenant_payload = tenant.model_dump(mode="json")
+    key_payload = key.model_dump(mode="json")
+    issued_payload = issued.model_dump(mode="json")
+    transport.add("GET", "/api/v1/platform/tenants", [tenant_payload])
+    transport.add("POST", "/api/v1/platform/tenants", issued_payload)
+    transport.add("PATCH", "/api/v1/platform/tenants/research", tenant_payload)
+    transport.add("GET", "/api/v1/tenant", tenant_payload)
+    transport.add("GET", "/api/v1/tenant/api-keys", [key_payload])
+    transport.add("POST", "/api/v1/tenant/api-keys", issued_payload)
+    transport.add("DELETE", "/api/v1/tenant/api-keys/admin-v1", key_payload)
+    client = AsyncAgentEvalClient(transport=transport)
+
+    assert await client.tenants() == [tenant]
+    assert await client.create_tenant("research", "Agent Research", "admin-v1") == issued
+    assert await client.set_tenant_status("research", "active") == tenant
+    assert await client.tenant() == tenant
+    assert await client.tenant_api_keys() == [key]
+    assert await client.issue_tenant_api_key("admin-v1", {"admin"}) == issued
+    assert await client.revoke_tenant_api_key("admin-v1") == key
 
 
 @pytest.mark.asyncio
